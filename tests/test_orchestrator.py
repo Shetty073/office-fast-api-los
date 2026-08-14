@@ -405,3 +405,158 @@ def test_secret_header_injection(monkeypatch):
     headers = SecretResolver.get_auth_headers("test_service")
     assert headers["Authorization"] == "Bearer prod-key-12345"
 
+
+@pytest.mark.asyncio
+async def test_conditional_routing_run_and_skip(db_session, db_session_factory):
+    # Test case 1: condition matches (todo completed is True) -> post service runs
+    exec_run = Orchestrator.create_execution(
+        db=db_session,
+        sequence=["todo_service", "post_service"],
+        inputs={
+            "todo_service": {"todo_id": 1, "_mock": True},
+            "post_service": {"body": "Test", "_mock": True}
+        },
+        mappings=[],
+        conditions={
+            "post_service": "responses.todo_service.data.completed == True"
+        }
+    )
+    await Orchestrator.run_sequence(exec_run.id, db_session_factory)
+    db_session.expire_all()
+    reloaded_run = db_session.query(SequenceExecution).filter(SequenceExecution.id == exec_run.id).first()
+    assert reloaded_run.steps_data[1]["status"] == "COMPLETED"
+
+    # Test case 2: condition does not match (todo completed is False) -> post service skipped
+    # Let's register a mock todo response returning completed=False
+    @register_service
+    class IncompleteTodoSvc(BaseService):
+        @property
+        def name(self) -> str:
+            return "inc_todo_svc"
+        async def _run(self, payload: dict, client: APIClient):
+            return {"success": True, "data": {"completed": False}}
+
+    exec_skip = Orchestrator.create_execution(
+        db=db_session,
+        sequence=["inc_todo_svc", "post_service"],
+        inputs={
+            "inc_todo_svc": {},
+            "post_service": {"body": "Test", "_mock": True}
+        },
+        mappings=[],
+        conditions={
+            "post_service": "responses.inc_todo_svc.data.completed == True"
+        }
+    )
+    await Orchestrator.run_sequence(exec_skip.id, db_session_factory)
+    db_session.expire_all()
+    reloaded_skip = db_session.query(SequenceExecution).filter(SequenceExecution.id == exec_skip.id).first()
+    assert reloaded_skip.steps_data[1]["status"] == "SKIPPED"
+    assert reloaded_skip.steps_data[1]["error_message"] == "Condition not met"
+
+@pytest.mark.asyncio
+async def test_mapping_transformations(db_session, db_session_factory):
+    # Register service that outputs string/lowercase values
+    @register_service
+    class OutputSvc(BaseService):
+        @property
+        def name(self) -> str:
+            return "output_svc"
+        async def _run(self, payload: dict, client: APIClient):
+            return {"success": True, "data": {"num_str": "123", "text": "hello"}}
+
+    @register_service
+    class InputSvc(BaseService):
+        @property
+        def name(self) -> str:
+            return "input_svc"
+        async def _run(self, payload: dict, client: APIClient):
+            return {"success": True, "data": payload}
+
+    exec_obj = Orchestrator.create_execution(
+        db=db_session,
+        sequence=["output_svc", "input_svc"],
+        inputs={},
+        mappings=[
+            {
+                "from_service": "output_svc",
+                "from_field": "num_str",
+                "to_service": "input_svc",
+                "to_field": "number",
+                "transform": "to_int"
+            },
+            {
+                "from_service": "output_svc",
+                "from_field": "text",
+                "to_service": "input_svc",
+                "to_field": "upper_text",
+                "transform": "upper"
+            }
+        ]
+    )
+    await Orchestrator.run_sequence(exec_obj.id, db_session_factory)
+    db_session.expire_all()
+    reloaded = db_session.query(SequenceExecution).filter(SequenceExecution.id == exec_obj.id).first()
+    assert reloaded.status == "COMPLETED"
+    input_payload = reloaded.steps_data[1]["input_payload"]
+    assert input_payload["number"] == 123  # Int!
+    assert input_payload["upper_text"] == "HELLO"  # Upper case!
+
+@pytest.mark.asyncio
+async def test_global_context_mapping_and_updates(db_session, db_session_factory):
+    # Register service that updates context
+    @register_service
+    class ContextUpdateSvc(BaseService):
+        @property
+        def name(self) -> str:
+            return "context_update_svc"
+        async def _run(self, payload: dict, client: APIClient):
+            return {
+                "success": True,
+                "data": {},
+                "context_updates": {
+                    "runtime_val": "changed"
+                }
+            }
+
+    @register_service
+    class ContextReadSvc(BaseService):
+        @property
+        def name(self) -> str:
+            return "context_read_svc"
+        async def _run(self, payload: dict, client: APIClient):
+            return {"success": True, "data": payload}
+
+    exec_obj = Orchestrator.create_execution(
+        db=db_session,
+        sequence=["context_update_svc", "context_read_svc"],
+        inputs={},
+        context={
+            "initial_key": "init"
+        },
+        mappings=[
+            {
+                "from_service": "context",
+                "from_field": "initial_key",
+                "to_service": "context_read_svc",
+                "to_field": "val1"
+            },
+            {
+                "from_service": "context",
+                "from_field": "runtime_val",
+                "to_service": "context_read_svc",
+                "to_field": "val2"
+            }
+        ]
+    )
+    await Orchestrator.run_sequence(exec_obj.id, db_session_factory)
+    db_session.expire_all()
+    reloaded = db_session.query(SequenceExecution).filter(SequenceExecution.id == exec_obj.id).first()
+    assert reloaded.status == "COMPLETED"
+    assert reloaded.context["initial_key"] == "init"
+    assert reloaded.context["runtime_val"] == "changed"
+    
+    read_payload = reloaded.steps_data[1]["input_payload"]
+    assert read_payload["val1"] == "init"
+    assert read_payload["val2"] == "changed"
+

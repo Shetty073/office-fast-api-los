@@ -58,40 +58,6 @@
       "response": []
     },
     {
-      "name": "Standalone Service - Todo Service (Real)",
-      "request": {
-        "method": "POST",
-        "header": [],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n    \"todo_id\": 1\n}",
-          "options": {
-            "raw": {
-              "language": "json"
-            }
-          }
-        },
-        "url": {
-          "raw": "{{base_url}}/api/standalone/todo_service?mock=false",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "api",
-            "standalone",
-            "todo_service"
-          ],
-          "query": [
-            {
-              "key": "mock",
-              "value": "false"
-            }
-          ]
-        }
-      },
-      "response": []
-    },
-    {
       "name": "Trigger Chain - Sequential with Idempotency",
       "request": {
         "method": "POST",
@@ -127,6 +93,62 @@
         "body": {
           "mode": "raw",
           "raw": "{\n    \"sequence\": [\n        \"todo_service\",\n        [\n            \"post_service\"\n        ]\n    ],\n    \"inputs\": {\n        \"todo_service\": {\n            \"todo_id\": 1\n        },\n        \"post_service\": {\n            \"title\": \"Parallel Run Title\",\n            \"body\": \"Parallel execution body text\",\n            \"userId\": 1\n        }\n    },\n    \"mappings\": []\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{base_url}}/api/chain/trigger",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "chain",
+            "trigger"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Trigger Chain - Conditional Routing & Transformations",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"sequence\": [\n        \"todo_service\",\n        \"post_service\"\n    ],\n    \"inputs\": {\n        \"todo_service\": {\n            \"todo_id\": 2\n        },\n        \"post_service\": {\n            \"body\": \"Conditional post execution body\"\n        }\n    },\n    \"mappings\": [\n        {\n            \"from_service\": \"todo_service\",\n            \"from_field\": \"id\",\n            \"to_service\": \"post_service\",\n            \"to_field\": \"userId\",\n            \"transform\": \"to_int\"\n        }\n    ],\n    \"conditions\": {\n        \"post_service\": \"responses.todo_service.data.completed == True\"\n    },\n    \"context\": {\n        \"client_type\": \"premium\"\n    }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{base_url}}/api/chain/trigger",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "chain",
+            "trigger"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Trigger Chain - Global Context Mapping",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"sequence\": [\n        \"post_service\"\n    ],\n    \"inputs\": {\n        \"post_service\": {\n            \"body\": \"Context-mapped test body\"\n        }\n    },\n    \"mappings\": [\n        {\n            \"from_service\": \"context\",\n            \"from_field\": \"default_user_id\",\n            \"to_service\": \"post_service\",\n            \"to_field\": \"userId\",\n            \"transform\": \"to_int\"\n        },\n        {\n            \"from_service\": \"context\",\n            \"from_field\": \"default_title\",\n            \"to_service\": \"post_service\",\n            \"to_field\": \"title\",\n            \"transform\": \"upper\"\n        }\n    ],\n    \"context\": {\n        \"default_user_id\": \"99\",\n        \"default_title\": \"Global Title\"\n    }\n}",
           "options": {
             "raw": {
               "language": "json"

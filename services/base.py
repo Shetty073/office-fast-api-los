@@ -68,12 +68,18 @@ class BaseService(ABC):
         if should_mock:
             try:
                 mock_data = self.get_mock_response(payload)
+                context_updates = None
+                if isinstance(mock_data, dict) and "context_updates" in mock_data:
+                    context_updates = mock_data.pop("context_updates")
+                    
                 result = {
                     "success": True,
                     "data": mock_data,
                     "error": None,
                     "status_code": 200
                 }
+                if context_updates:
+                    result["context_updates"] = context_updates
             except Exception as e:
                 result = {
                     "success": False,

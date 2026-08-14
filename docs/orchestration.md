@@ -56,56 +56,93 @@ To prevent duplicate runs (e.g. from network retries), pass a unique `idempotenc
 }
 ```
 * If a duplicate key is detected, the API returns the existing record immediately.
-* If the task is already `RUNNING` or `COMPLETED`, it will not launch a duplicate background task, protecting downstream systems from redundant API costs.
+* If the task is already `RUNNING` or `COMPLETED`, it will not launch a duplicate background task.
 
 ---
 
-## 5. Resiliency Features
+## 5. Conditional Step Routing
 
-* **Exponential Backoff and Jitter**: Retries calculate delays dynamically: `delay = (base * 2^(retry_count-1)) + jitter`. This avoids overloading external systems when recovering from outages.
-* **Timeout Enforcements**: A default timeout of `10.0` seconds is applied to every client request. Services can customize timeouts by overriding the `timeout` property:
-  ```python
-  @property
-  def timeout(self) -> float:
-      return 5.0 # 5 seconds
-  ```
-* **Secret Injection**: The engine features a centralized `SecretResolver` in `utils.py` that automatically pulls service credentials from env variables (e.g., `TODO_SERVICE_API_KEY`) and injects them as `Authorization` headers.
-
----
-
-## 6. Inter-Service Data Mapping
-
-To pass outputs from a previous API as inputs to the next API in a sequence, define mappings in the `mappings` list of your trigger payload.
-
-### Mapping Rule Syntax
-Each mapping rule is an object:
-* `from_service`: The name of the source service (e.g. `"todo_service"`).
-* `from_field`: The dot-notated path to resolve inside the source service's **response data block** (`response["data"]`).
-* `to_service`: The name of the target service (e.g. `"post_service"`).
-* `to_field`: The dot-notated path in the target service's input payload to populate.
-
-#### Example Payload:
+You can conditionally run or skip individual steps by defining python-based boolean expressions in the `conditions` object mapping `service_name -> expression`:
 ```json
 {
-    "sequence": [
-        "todo_service",
-        "post_service"
-    ],
-    "inputs": {
-        "todo_service": {
-            "todo_id": 2
-        },
-        "post_service": {
-            "body": "Static post description"
-        }
-    },
+    "sequence": ["todo_service", "post_service"],
+    "conditions": {
+        "post_service": "responses.todo_service.data.completed == True"
+    }
+}
+```
+* **Evaluation Context**: The evaluator exposes two root namespaces to your condition expression:
+  * `responses`: A dot-accessible object of previous service responses (e.g., `responses.todo_service.data.completed`).
+  * `context`: A dot-accessible object of the global shared context (e.g., `context.is_vip`).
+* **Behavior**: If the condition evaluates to `False`, the step is marked as `SKIPPED` in the database, and the execution proceeds cleanly to the next step.
+
+---
+
+## 6. Mapping Transformations
+
+When passing outputs to inputs, you can specify an optional `transform` type in the mapping payload to convert or modify values:
+```json
+{
     "mappings": [
         {
             "from_service": "todo_service",
-            "from_field": "title",
+            "from_field": "id",
             "to_service": "post_service",
-            "to_field": "title"
+            "to_field": "todo_id",
+            "transform": "to_int"
         }
     ]
 }
 ```
+Supported transformation types:
+* `to_int`: Converts values to integers (e.g., `"123"` $\rightarrow$ `123`).
+* `to_str`: Converts values to strings (e.g., `123` $\rightarrow$ `"123"`).
+* `upper`: Converts string values to UPPERCASE.
+* `lower`: Converts string values to lowercase.
+
+---
+
+## 7. Global Shared Context (State Management)
+
+You can pass a global `context` dictionary at trigger time and map fields from it directly into target service payloads. Additionally, services can update this context dynamically at runtime.
+
+### Mapping from Global Context
+Use `"context"` as the `from_service` name in your mappings:
+```json
+{
+    "context": {
+        "user_tier": "VIP"
+    },
+    "mappings": [
+        {
+            "from_service": "context",
+            "from_field": "user_tier",
+            "to_service": "post_service",
+            "to_field": "priority"
+        }
+    ]
+}
+```
+
+### Runtime Context Updates
+A service subclass can modify the global context dynamically by returning a `context_updates` dictionary in its execution response:
+```python
+async def _run(self, payload: dict, client: APIClient):
+    # Service execution...
+    return {
+        "success": True,
+        "data": {"result": "success"},
+        "context_updates": {
+            "credit_decision": "APPROVED"
+        }
+    }
+```
+The orchestrator automatically updates the execution's persistent context state with these updates as they occur.
+
+---
+
+## 8. Resiliency Features
+
+* **Exponential Backoff and Jitter**: Retries calculate delays dynamically: `delay = (base * 2^(retry_count-1)) + jitter`. This avoids overloading external systems when recovering from outages.
+* **Timeout Enforcements**: A default timeout of `10.0` seconds is applied to every client request. Services can customize timeouts by overriding the `timeout` property.
+* **Secret Injection**: The engine features a centralized `SecretResolver` in `utils.py` that automatically pulls service credentials from env variables (e.g., `TODO_SERVICE_API_KEY`) and injects them as `Authorization` headers.

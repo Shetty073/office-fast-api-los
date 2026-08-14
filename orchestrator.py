@@ -11,6 +11,41 @@ from utils import get_by_path, set_by_path, APIClient
 
 logger = logging.getLogger(__name__)
 
+def evaluate_condition(expression: str, responses: Dict[str, Any], context: Dict[str, Any]) -> bool:
+    """
+    Safely evaluate a simple boolean expression string.
+    Exposes 'responses' and 'context' to the expression namespace.
+    """
+    if not expression:
+        return True
+    try:
+        class DotDict:
+            def __init__(self, d):
+                for k, v in d.items():
+                    if isinstance(v, dict):
+                        setattr(self, k, DotDict(v))
+                    elif isinstance(v, list):
+                        setattr(self, k, [DotDict(item) if isinstance(item, dict) else item for item in v])
+                    else:
+                        setattr(self, k, v)
+            def __getattr__(self, name):
+                return None
+        
+        wrapped_responses = DotDict(responses)
+        wrapped_context = DotDict(context)
+        
+        allowed_globals = {
+            "responses": wrapped_responses,
+            "context": wrapped_context,
+            "True": True,
+            "False": False,
+            "None": None
+        }
+        return bool(eval(expression, allowed_globals, {}))
+    except Exception as e:
+        logger.error(f"Error evaluating condition '{expression}': {e}")
+        return False
+
 class Orchestrator:
     @staticmethod
     def create_execution(
@@ -19,7 +54,9 @@ class Orchestrator:
         inputs: Dict[str, Any], 
         mappings: List[Any],
         success_conditions: Optional[Dict[str, Dict[str, Any]]] = None,
-        idempotency_key: Optional[str] = None
+        idempotency_key: Optional[str] = None,
+        conditions: Optional[Dict[str, str]] = None,
+        context: Optional[Dict[str, Any]] = None
     ) -> SequenceExecution:
         """
         Validate services exist, initialize the sequence execution model and save to the DB.
@@ -64,6 +101,8 @@ class Orchestrator:
             mappings=serialized_mappings,
             success_conditions=success_conditions,
             idempotency_key=idempotency_key,
+            conditions=conditions,
+            context=context or {},
             status="PENDING",
             current_step=0,
             steps_data=[]
@@ -124,6 +163,35 @@ class Orchestrator:
             async def run_single_step(service_name: str, step_idx: int):
                 service = ServiceRegistry.get(service_name)
                 
+                # Evaluate execution condition if defined
+                condition = None
+                if execution.conditions and isinstance(execution.conditions, dict):
+                    condition = execution.conditions.get(service_name)
+                
+                should_run = True
+                if condition:
+                    should_run = evaluate_condition(condition, responses, execution.context or {})
+                
+                if not should_run:
+                    step_info = {
+                        "service_name": service_name,
+                        "status": "SKIPPED",
+                        "input_payload": {},
+                        "output_response": None,
+                        "error_message": "Condition not met",
+                        "started_at": datetime.utcnow().isoformat(),
+                        "finished_at": datetime.utcnow().isoformat(),
+                        "duration_ms": 0,
+                        "retry_count": 0
+                    }
+                    current_steps = list(execution.steps_data)
+                    current_steps[step_idx] = step_info
+                    execution.steps_data = current_steps
+                    db.commit()
+                    
+                    responses[service_name] = {"success": True, "data": None, "status_code": 200, "skipped": True}
+                    return True, service_name, {}, responses[service_name], None
+
                 step_info = {
                     "service_name": service_name,
                     "status": "RUNNING",
@@ -148,21 +216,40 @@ class Orchestrator:
                 # Extract optional runtime mock override from input parameters
                 mock_override = payload.pop("_mock", None)
 
-                # Resolve incoming mappings from previous service output fields
+                # Resolve incoming mappings from previous service output fields or global context
                 for mapping in execution.mappings:
                     if mapping.get("to_service") == service_name:
                         from_service = mapping.get("from_service")
-                        # Since previous steps/blocks have completed, resolve outputs from completed steps
-                        if from_service in responses:
+                        val = None
+                        
+                        if from_service == "context":
+                            source_data = execution.context or {}
+                            from_field = mapping.get("from_field")
+                            val = get_by_path(source_data, from_field)
+                        elif from_service in responses:
                             prev_response = responses[from_service]
                             if prev_response.get("success") and prev_response.get("data") is not None:
                                 source_data = prev_response["data"]
                                 from_field = mapping.get("from_field")
-                                to_field = mapping.get("to_field")
-                                
                                 val = get_by_path(source_data, from_field)
-                                if val is not None:
-                                    set_by_path(payload, to_field, val)
+                                
+                        if val is not None:
+                            # Apply transformations
+                            transform_type = mapping.get("transform")
+                            if transform_type == "to_int":
+                                try:
+                                    val = int(val)
+                                except (ValueError, TypeError):
+                                    pass
+                            elif transform_type == "to_str":
+                                val = str(val)
+                            elif transform_type == "upper" and isinstance(val, str):
+                                val = val.upper()
+                            elif transform_type == "lower" and isinstance(val, str):
+                                val = val.lower()
+                            
+                            to_field = mapping.get("to_field")
+                            set_by_path(payload, to_field, val)
 
                 step_info["input_payload"] = payload
                 current_steps = list(execution.steps_data)
@@ -219,6 +306,15 @@ class Orchestrator:
                     step_info["status"] = "COMPLETED"
                     step_info["output_response"] = service_response
                     responses[service_name] = service_response
+                    
+                    # Merge context updates into global execution context state
+                    if service_response and isinstance(service_response, dict):
+                        context_updates = service_response.get("context_updates")
+                        if context_updates and isinstance(context_updates, dict):
+                            current_context = dict(execution.context or {})
+                            current_context.update(context_updates)
+                            execution.context = current_context
+                            db.commit()
                 else:
                     step_info["status"] = "FAILED"
                     step_info["error_message"] = step_error

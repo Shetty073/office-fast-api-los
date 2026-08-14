@@ -11,6 +11,8 @@ class SequenceExecution(Base):
     mappings = Column(JSON, nullable=False)  # List of dict mappings
     success_conditions = Column(JSON, nullable=True)  # Dict of success conditions per service
     idempotency_key = Column(String(100), nullable=True, unique=True, index=True)
+    conditions = Column(JSON, nullable=True)  # Dict of execution conditions per service
+    context = Column(JSON, nullable=True)  # Dict representing the shared global context
     status = Column(String(20), default="PENDING")  # PENDING, RUNNING, COMPLETED, PARTIAL_SUCCESS, FAILED
     current_step = Column(Integer, default=0)
     steps_data = Column(JSON, default=list)  # Step tracking (JSON serialization)

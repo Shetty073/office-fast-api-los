@@ -7,6 +7,7 @@ class MappingSchema(BaseModel):
     from_field: str = Field(..., description="Dot-notated path of the output field to copy")
     to_service: str = Field(..., description="Name of the target service")
     to_field: str = Field(..., description="Dot-notated path of the input field to populate")
+    transform: Optional[str] = Field(None, description="Optional transformation type (e.g. to_int, to_str, upper, lower)")
 
 class SequenceTriggerSchema(BaseModel):
     sequence: List[Union[str, List[str]]] = Field(..., description="Ordered list of service names to run. Nested lists run in parallel.")
@@ -25,6 +26,14 @@ class SequenceTriggerSchema(BaseModel):
     idempotency_key: Optional[str] = Field(
         default=None,
         description="Unique key to prevent duplicate runs of the same orchestration."
+    )
+    conditions: Optional[Dict[str, str]] = Field(
+        default=None,
+        description="Optional execution conditions (service_name -> python boolean expression string)"
+    )
+    context: Optional[Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="Optional global shared context dictionary."
     )
 
 class StepExecutionSchema(BaseModel):
@@ -45,6 +54,8 @@ class SequenceExecutionResponseSchema(BaseModel):
     mappings: List[MappingSchema]
     success_conditions: Optional[Dict[str, Dict[str, Any]]] = None
     idempotency_key: Optional[str] = None
+    conditions: Optional[Dict[str, str]] = None
+    context: Optional[Dict[str, Any]] = None
     status: str
     current_step: int
     steps_data: List[StepExecutionSchema]
