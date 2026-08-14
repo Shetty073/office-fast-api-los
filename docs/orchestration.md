@@ -11,6 +11,21 @@ The orchestration workflow consists of:
 2. **Orchestrator (`orchestrator.py`)**: Executes steps in a background worker context via FastAPI's `BackgroundTasks`. It parses parallel/sequential steps, applies data mappings, enforces retry limits, and handles failures.
 3. **Database Logging**: Execution records are stored in the `sequence_executions` table, and all individual HTTP calls are logged to the `api_logs` table.
 
+### Database Schema Details (`SequenceExecution`)
+* `id` (String UUID): Primary key.
+* `sequence` (JSON): The ordered list of service names.
+* `inputs` (JSON): Dict mapping service names to initial payload arguments.
+* `mappings` (JSON): Declared field mapping instructions.
+* `success_conditions` (JSON): Assert rules evaluating output status/body values.
+* `conditions` (JSON): Conditional rules to run or skip execution steps.
+* `context` (JSON): Dynamic shared global state dict.
+* `callback_url` (String): Address to dispatch webhook POST callbacks.
+* `idempotency_key` (String): Key verifying unique submissions.
+* `status` (String): Workflow state (`PENDING`, `RUNNING`, `COMPLETED`, `PARTIAL_SUCCESS`, `FAILED`).
+* `current_step` (Integer): Step index currently running.
+* `steps_data` (JSON): Execution trace list containing timestamps, durations, and outputs.
+* `error_message` (String): Failure reason populated on exceptions.
+
 ---
 
 ## 2. Parallel Execution (Fork-Join)
@@ -141,7 +156,86 @@ The orchestrator automatically updates the execution's persistent context state 
 
 ---
 
-## 8. Resiliency Features
+## 8. Webhook Callback Notifications
+
+You can pass a `callback_url` parameter in your trigger payload:
+```json
+{
+    "sequence": ["todo_service"],
+    "callback_url": "https://your.webhook.domain/callbacks"
+}
+```
+When the sequence completes (either successfully, with partial success, or fails with an error/cancellation), the orchestrator automatically triggers a non-blocking `POST` notification back to that URL.
+
+### Callback Payload JSON Schema:
+```json
+{
+    "execution_id": "4b54e7d4-8d48-43d9-a790-db0776bdf2db",
+    "status": "COMPLETED",
+    "error_message": null,
+    "context": {
+        "client_type": "premium",
+        "credit_decision": "APPROVED"
+    },
+    "steps_data": [
+        {
+            "service_name": "todo_service",
+            "status": "COMPLETED",
+            "input_payload": {
+                "todo_id": 2
+            },
+            "output_response": {
+                "success": true,
+                "data": {
+                    "userId": 1,
+                    "id": 2,
+                    "title": "quis ut nam facilis et officia qui",
+                    "completed": true
+                },
+                "error": null,
+                "status_code": 200
+            },
+            "error_message": null,
+            "started_at": "2026-08-14T03:57:07.123456",
+            "finished_at": "2026-08-14T03:57:07.234567",
+            "duration_ms": 111,
+            "retry_count": 0
+        }
+    ]
+}
+```
+
+---
+
+## 9. Graceful Cancellation & Aborts
+
+If you need to stop an active execution, call the cancel endpoint:
+* **Endpoint**: `POST /api/chain/cancel/{execution_id}`
+* **Behavior**:
+  * Aborts the background task immediately using native asyncio cancellation.
+  * Sets the execution status in the database to `FAILED` with the message `"Cancelled by user"`.
+  * Automatically triggers SAGA rollbacks (`compensate` calls) for all previously completed steps in reverse order to return systems to a consistent state.
+
+---
+
+## 10. Sequence Retry / Resume
+
+If a sequence failed, you can retry it using one of two strategy profiles:
+* **Endpoint**: `POST /api/chain/retry/{execution_id}`
+* **Payload**:
+  ```json
+  {
+      "strategy": "restart"
+  }
+  ```
+  *(or `"strategy": "resume"`)*
+* **Strategies**:
+  * `restart`: Clears all past run logs (`steps_data`), resets step counts to 0, and runs the entire orchestration sequence from scratch.
+  * `resume`: Preserves already completed tasks in the previous failed run, sets the failed steps back to `"PENDING"`, and starts executing from the first failed step forward (avoiding double-billing on upstream APIs).
+
+---
+
+## 11. Resiliency Features
 
 * **Exponential Backoff and Jitter**: Retries calculate delays dynamically: `delay = (base * 2^(retry_count-1)) + jitter`. This avoids overloading external systems when recovering from outages.
 * **Timeout Enforcements**: A default timeout of `10.0` seconds is applied to every client request. Services can customize timeouts by overriding the `timeout` property.

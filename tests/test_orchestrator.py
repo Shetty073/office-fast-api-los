@@ -560,3 +560,131 @@ async def test_global_context_mapping_and_updates(db_session, db_session_factory
     assert read_payload["val1"] == "init"
     assert read_payload["val2"] == "changed"
 
+
+@pytest.mark.asyncio
+async def test_webhook_callback_notification(db_session, db_session_factory):
+    exec_obj = Orchestrator.create_execution(
+        db=db_session,
+        sequence=["todo_service"],
+        inputs={"todo_service": {"todo_id": 1, "_mock": True}},
+        mappings=[],
+        callback_url="https://test.webhook/callback"
+    )
+    
+    with patch("requests.post") as mock_post:
+        await Orchestrator.run_sequence(exec_obj.id, db_session_factory)
+        # Give a small delay for run_in_executor to launch webhook
+        await asyncio.sleep(0.1)
+        assert mock_post.called
+        args, kwargs = mock_post.call_args
+        assert args[0] == "https://test.webhook/callback"
+        assert kwargs["json"]["execution_id"] == exec_obj.id
+        assert kwargs["json"]["status"] == "COMPLETED"
+
+@pytest.mark.asyncio
+async def test_graceful_cancellation_and_saga_rollback(db_session, db_session_factory):
+    # We will trigger a sequence with a long running mock service.
+    # While it is running, we cancel it and check that Saga compensation is run on completed steps.
+    @register_service
+    class LongRunningSvc(BaseService):
+        @property
+        def name(self) -> str:
+            return "long_running_svc"
+        async def _run(self, payload: dict, client: APIClient):
+            await asyncio.sleep(10.0) # sleep 10s so we can cancel it
+            return {"success": True, "data": {}}
+
+    exec_obj = Orchestrator.create_execution(
+        db=db_session,
+        sequence=["todo_service", "long_running_svc"],
+        inputs={
+            "todo_service": {"todo_id": 1, "_mock": True},
+            "long_running_svc": {}
+        },
+        mappings=[]
+    )
+    
+    # Spy on compensate
+    with patch("services.todo_service.TodoService.compensate", new_callable=AsyncMock) as mock_compensate:
+        task = asyncio.create_task(Orchestrator.run_sequence(exec_obj.id, db_session_factory))
+        # Wait a small delay to make sure todo_service completes and we enter long_running_svc
+        await asyncio.sleep(0.1)
+        
+        # Issue cancel
+        task.cancel()
+        
+        # Wait for task completion/exception
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+            
+        assert mock_compensate.called
+        
+    db_session.expire_all()
+    reloaded = db_session.query(SequenceExecution).filter(SequenceExecution.id == exec_obj.id).first()
+    assert reloaded.status == "FAILED"
+    assert reloaded.error_message == "Cancelled by user"
+
+@pytest.mark.asyncio
+async def test_retry_restart_and_resume_strategies(db_session, db_session_factory):
+    # Setup: todo_service succeeded, fails_once_svc fails.
+    # We trigger a resume, verify todo_service is skipped.
+    
+    @register_service
+    class FailsOnceSvc(BaseService):
+        call_count = 0
+        @property
+        def name(self) -> str:
+            return "fails_once_svc"
+        @property
+        def max_retries(self) -> int:
+            return 0
+        async def _run(self, payload: dict, client: APIClient):
+            FailsOnceSvc.call_count += 1
+            if FailsOnceSvc.call_count == 1:
+                return {"success": False, "error": "Forced fail", "status_code": 500}
+            return {"success": True, "data": {"status": "success"}}
+
+    exec_obj = Orchestrator.create_execution(
+        db=db_session,
+        sequence=["todo_service", "fails_once_svc"],
+        inputs={
+            "todo_service": {"todo_id": 1, "_mock": True},
+            "fails_once_svc": {}
+        },
+        mappings=[]
+    )
+    
+    # Run first attempt (todo_service COMPLETED, fails_once_svc FAILED)
+    await Orchestrator.run_sequence(exec_obj.id, db_session_factory)
+    
+    db_session.expire_all()
+    reloaded = db_session.query(SequenceExecution).filter(SequenceExecution.id == exec_obj.id).first()
+    assert reloaded.status == "FAILED"
+    assert reloaded.steps_data[0]["status"] == "COMPLETED"
+    assert reloaded.steps_data[1]["status"] == "FAILED"
+    assert FailsOnceSvc.call_count == 1
+    
+    # Resume Strategy: Reset failed step to PENDING, run again.
+    # todo_service should be skipped (cached). fails_once_svc should run and succeed.
+    reloaded.status = "PENDING"
+    reloaded.error_message = None
+    current_steps = list(reloaded.steps_data)
+    current_steps[1]["status"] = "PENDING"
+    current_steps[1]["error_message"] = None
+    reloaded.steps_data = current_steps
+    db_session.commit()
+    
+    with patch("services.todo_service.TodoService.execute") as mock_todo_exec:
+        await Orchestrator.run_sequence(reloaded.id, db_session_factory)
+        # Verify todo_service was NOT executed again
+        assert not mock_todo_exec.called
+        
+    db_session.expire_all()
+    reloaded = db_session.query(SequenceExecution).filter(SequenceExecution.id == exec_obj.id).first()
+    assert reloaded.status == "COMPLETED"
+    assert reloaded.steps_data[0]["status"] == "COMPLETED"
+    assert reloaded.steps_data[1]["status"] == "COMPLETED"
+    assert FailsOnceSvc.call_count == 2
+

@@ -13,6 +13,7 @@ class SequenceExecution(Base):
     idempotency_key = Column(String(100), nullable=True, unique=True, index=True)
     conditions = Column(JSON, nullable=True)  # Dict of execution conditions per service
     context = Column(JSON, nullable=True)  # Dict representing the shared global context
+    callback_url = Column(String(500), nullable=True)  # Webhook URL for sequence outcomes
     status = Column(String(20), default="PENDING")  # PENDING, RUNNING, COMPLETED, PARTIAL_SUCCESS, FAILED
     current_step = Column(Integer, default=0)
     steps_data = Column(JSON, default=list)  # Step tracking (JSON serialization)

@@ -174,3 +174,52 @@ def test_trigger_chain_idempotency(client):
         data2 = response2.json()
         assert data2["id"] == data1["id"]
         assert mock_add_task.call_count == 1 # still 1!
+
+def test_cancel_chain_route(client, db_session):
+    # Setup record in RUNNING status
+    from models import SequenceExecution
+    import uuid
+    exec_id = str(uuid.uuid4())
+    execution = SequenceExecution(
+        id=exec_id,
+        sequence=["todo_service"],
+        inputs={},
+        mappings=[],
+        status="RUNNING"
+    )
+    db_session.add(execution)
+    db_session.commit()
+    
+    response = client.post(f"/api/chain/cancel/{exec_id}")
+    assert response.status_code == 200
+    assert "Cancellation" in response.json()["detail"]
+    
+    db_session.expire_all()
+    reloaded = db_session.query(SequenceExecution).filter(SequenceExecution.id == exec_id).first()
+    assert reloaded.status == "FAILED"
+    assert reloaded.error_message == "Cancelled by user"
+
+def test_retry_chain_route(client, db_session):
+    # Setup record in FAILED status
+    from models import SequenceExecution
+    import uuid
+    exec_id = str(uuid.uuid4())
+    execution = SequenceExecution(
+        id=exec_id,
+        sequence=["todo_service"],
+        inputs={},
+        mappings=[],
+        status="FAILED",
+        steps_data=[
+            {"service_name": "todo_service", "status": "FAILED", "input_payload": {}, "output_response": None}
+        ]
+    )
+    db_session.add(execution)
+    db_session.commit()
+    
+    with patch("fastapi.BackgroundTasks.add_task") as mock_add_task:
+        response = client.post(f"/api/chain/retry/{exec_id}", json={"strategy": "resume"})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "PENDING"
+        assert mock_add_task.called

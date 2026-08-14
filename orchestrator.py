@@ -47,6 +47,8 @@ def evaluate_condition(expression: str, responses: Dict[str, Any], context: Dict
         return False
 
 class Orchestrator:
+    active_tasks: Dict[str, asyncio.Task] = {}
+
     @staticmethod
     def create_execution(
         db: Session, 
@@ -56,7 +58,8 @@ class Orchestrator:
         success_conditions: Optional[Dict[str, Dict[str, Any]]] = None,
         idempotency_key: Optional[str] = None,
         conditions: Optional[Dict[str, str]] = None,
-        context: Optional[Dict[str, Any]] = None
+        context: Optional[Dict[str, Any]] = None,
+        callback_url: Optional[str] = None
     ) -> SequenceExecution:
         """
         Validate services exist, initialize the sequence execution model and save to the DB.
@@ -103,6 +106,7 @@ class Orchestrator:
             idempotency_key=idempotency_key,
             conditions=conditions,
             context=context or {},
+            callback_url=callback_url,
             status="PENDING",
             current_step=0,
             steps_data=[]
@@ -120,6 +124,7 @@ class Orchestrator:
         Provides support for inputs mapping, retries, step latency logging, Saga rollbacks,
         parallel executions, and partial success states.
         """
+        cls.active_tasks[execution_id] = asyncio.current_task()
         db_gen = get_db_session()
         db = next(db_gen)
         try:
@@ -135,32 +140,42 @@ class Orchestrator:
             completed_steps = []  # List of tuples: (service_name, input_payload, output_response)
             has_partial_failure = False
 
-            # Initialize steps_data structure for all steps upfront to prevent race conditions on commits
-            steps_data = []
-            flat_services = []
-            for step_item in execution.sequence:
-                if isinstance(step_item, list):
-                    flat_services.extend(step_item)
-                else:
-                    flat_services.append(step_item)
+            # Initialize steps_data structure for all steps upfront if not already populated
+            if not execution.steps_data:
+                steps_data = []
+                flat_services = []
+                for step_item in execution.sequence:
+                    if isinstance(step_item, list):
+                        flat_services.extend(step_item)
+                    else:
+                        flat_services.append(step_item)
 
-            for name in flat_services:
-                steps_data.append({
-                    "service_name": name,
-                    "status": "PENDING",
-                    "input_payload": {},
-                    "output_response": None,
-                    "error_message": None,
-                    "started_at": None,
-                    "finished_at": None,
-                    "duration_ms": 0,
-                    "retry_count": 0
-                })
-            execution.steps_data = steps_data
-            db.commit()
+                for name in flat_services:
+                    steps_data.append({
+                        "service_name": name,
+                        "status": "PENDING",
+                        "input_payload": {},
+                        "output_response": None,
+                        "error_message": None,
+                        "started_at": None,
+                        "finished_at": None,
+                        "duration_ms": 0,
+                        "retry_count": 0
+                    })
+                execution.steps_data = steps_data
+                db.commit()
 
             # Helper for executing a single step logic
             async def run_single_step(service_name: str, step_idx: int):
+                # Check if this step is already completed from a previous run (Resume strategy)
+                if step_idx < len(execution.steps_data) and execution.steps_data[step_idx]["status"] == "COMPLETED":
+                    logger.info(f"Resume: Skipping already completed step '{service_name}'")
+                    cached_response = execution.steps_data[step_idx]["output_response"]
+                    responses[service_name] = cached_response
+                    cached_payload = execution.steps_data[step_idx]["input_payload"]
+                    completed_steps.append((service_name, cached_payload, cached_response))
+                    return True, service_name, cached_payload, cached_response, None
+
                 service = ServiceRegistry.get(service_name)
                 
                 # Evaluate execution condition if defined
@@ -409,6 +424,19 @@ class Orchestrator:
             execution.status = "PARTIAL_SUCCESS" if has_partial_failure else "COMPLETED"
             db.commit()
 
+        except asyncio.CancelledError:
+            logger.info(f"Execution {execution_id} was cancelled by user request.")
+            try:
+                execution = db.query(SequenceExecution).filter(SequenceExecution.id == execution_id).first()
+                if execution:
+                    execution.status = "FAILED"
+                    execution.error_message = "Cancelled by user"
+                    execution.steps_data = [s for s in execution.steps_data if s["status"] != "PENDING"]
+                    db.commit()
+            except Exception:
+                pass
+            await rollback_sequence(completed_steps)
+            raise
         except Exception as e:
             logger.exception(f"Internal Orchestrator failure: {e}")
             try:
@@ -420,7 +448,39 @@ class Orchestrator:
             except Exception:
                 pass
         finally:
+            cls.active_tasks.pop(execution_id, None)
             try:
-                next(db_gen)
-            except StopIteration:
-                pass
+                # Re-fetch database object inside a clean scoped session to avoid connection closed error on webhook POST
+                db_gen_wh = get_db_session()
+                db_wh = next(db_gen_wh)
+                try:
+                    execution = db_wh.query(SequenceExecution).filter(SequenceExecution.id == execution_id).first()
+                    if execution and execution.callback_url:
+                        def send_webhook(url: str, payload: dict):
+                            try:
+                                import requests
+                                requests.post(url, json=payload, timeout=5.0)
+                            except Exception as err:
+                                logger.error(f"Failed to send webhook callback: {err}")
+                                
+                        payload = {
+                            "execution_id": execution.id,
+                            "status": execution.status,
+                            "error_message": execution.error_message,
+                            "context": execution.context,
+                            "steps_data": execution.steps_data
+                        }
+                        loop = asyncio.get_running_loop()
+                        loop.run_in_executor(None, send_webhook, execution.callback_url, payload)
+                finally:
+                    try:
+                        next(db_gen_wh)
+                    except StopIteration:
+                        pass
+            except Exception as wh_err:
+                logger.error(f"Webhook dispatch system error: {wh_err}")
+            finally:
+                try:
+                    next(db_gen)
+                except StopIteration:
+                    pass

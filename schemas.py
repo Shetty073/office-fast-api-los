@@ -35,6 +35,10 @@ class SequenceTriggerSchema(BaseModel):
         default_factory=dict,
         description="Optional global shared context dictionary."
     )
+    callback_url: Optional[str] = Field(
+        default=None,
+        description="Optional callback URL for webhook updates."
+    )
 
 class StepExecutionSchema(BaseModel):
     service_name: str
@@ -56,6 +60,7 @@ class SequenceExecutionResponseSchema(BaseModel):
     idempotency_key: Optional[str] = None
     conditions: Optional[Dict[str, str]] = None
     context: Optional[Dict[str, Any]] = None
+    callback_url: Optional[str] = None
     status: str
     current_step: int
     steps_data: List[StepExecutionSchema]
@@ -65,3 +70,6 @@ class SequenceExecutionResponseSchema(BaseModel):
 
     class Config:
         from_attributes = True
+
+class SequenceRetrySchema(BaseModel):
+    strategy: str = Field(..., description="Retry strategy: 'restart' or 'resume'")

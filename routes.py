@@ -5,7 +5,7 @@ from database import get_db
 from models import SequenceExecution
 from services.registry import ServiceRegistry
 from orchestrator import Orchestrator
-from schemas import SequenceTriggerSchema, SequenceExecutionResponseSchema
+from schemas import SequenceTriggerSchema, SequenceExecutionResponseSchema, SequenceRetrySchema
 
 router = APIRouter(prefix="/api")
 
@@ -53,7 +53,8 @@ async def trigger_chain(
             success_conditions=payload.success_conditions,
             idempotency_key=payload.idempotency_key,
             conditions=payload.conditions,
-            context=payload.context
+            context=payload.context,
+            callback_url=payload.callback_url
         )
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -73,4 +74,109 @@ async def get_chain_status(execution_id: str, db: Session = Depends(get_db)):
     execution = db.query(SequenceExecution).filter(SequenceExecution.id == execution_id).first()
     if not execution:
         raise HTTPException(status_code=404, detail=f"Sequence execution '{execution_id}' not found.")
+    return execution
+
+@router.post("/chain/cancel/{execution_id}")
+async def cancel_chain(
+    execution_id: str, 
+    background_tasks: BackgroundTasks, 
+    db: Session = Depends(get_db)
+):
+    """
+    Cancel an active execution. Triggers Saga rollback compensating transactions on completed steps.
+    """
+    execution = db.query(SequenceExecution).filter(SequenceExecution.id == execution_id).first()
+    if not execution:
+        raise HTTPException(status_code=404, detail=f"Sequence execution '{execution_id}' not found.")
+    
+    if execution.status not in ["PENDING", "RUNNING"]:
+        raise HTTPException(status_code=400, detail=f"Cannot cancel execution in status '{execution.status}'.")
+
+    # Change status to FAILED in DB first (so it doesn't try to continue)
+    execution.status = "FAILED"
+    execution.error_message = "Cancelled by user"
+    # Remove PENDING placeholders
+    execution.steps_data = [s for s in execution.steps_data if s["status"] != "PENDING"]
+    db.commit()
+
+    # Look up in active_tasks map and cancel
+    task = Orchestrator.active_tasks.get(execution_id)
+    if task:
+        task.cancel()
+        return {"detail": "Cancellation command issued and background task interrupted."}
+    else:
+        # If not active in background memory map, trigger SAGA rollback manually here
+        # (This is a safety fallback for pending/orphaned tasks)
+        from orchestrator import ServiceRegistry, APIClient
+        completed_steps = []
+        for step in execution.steps_data:
+            if step["status"] == "COMPLETED":
+                completed_steps.append((step["service_name"], step["input_payload"], step["output_response"]))
+        
+        async def rollback():
+            for name, payload, response in reversed(completed_steps):
+                service = ServiceRegistry.get(name)
+                client = APIClient(service_name=service.name, execution_id=execution_id, timeout=service.timeout)
+                try:
+                    await service.compensate(payload=payload, response=response, client=client)
+                except Exception:
+                    pass
+        background_tasks.add_task(rollback)
+        return {"detail": "Cancellation issued: Task was not active in worker map. Executed compensating transactions manually.", "manual_rollback_triggered": True}
+
+@router.post("/chain/retry/{execution_id}", response_model=SequenceExecutionResponseSchema)
+async def retry_chain(
+    execution_id: str,
+    payload: SequenceRetrySchema,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """
+    Retry a failed or partially successful orchestration sequence.
+    Strategies:
+      - 'restart': Clear steps data and run again from scratch.
+      - 'resume': Preserve completed steps and continue running from the first failed step.
+    """
+    execution = db.query(SequenceExecution).filter(SequenceExecution.id == execution_id).first()
+    if not execution:
+        raise HTTPException(status_code=404, detail=f"Sequence execution '{execution_id}' not found.")
+    
+    if execution.status not in ["FAILED", "PARTIAL_SUCCESS"]:
+        raise HTTPException(status_code=400, detail=f"Only failed or partially successful executions can be retried. Current status is '{execution.status}'.")
+
+    if payload.strategy == "restart":
+        # Reset everything to fresh state
+        execution.status = "PENDING"
+        execution.error_message = None
+        execution.current_step = 0
+        execution.steps_data = []  # Clear steps data so it gets re-initialized fresh
+        db.commit()
+    elif payload.strategy == "resume":
+        # Reset failed steps to pending so they run again. Keep completed steps intact.
+        execution.status = "PENDING"
+        execution.error_message = None
+        
+        current_steps = list(execution.steps_data)
+        has_failed = False
+        first_failed_idx = 0
+        for idx, step in enumerate(current_steps):
+            if step["status"] in ["FAILED", "RUNNING"]:
+                step["status"] = "PENDING"
+                step["error_message"] = None
+                step["started_at"] = None
+                step["finished_at"] = None
+                step["duration_ms"] = 0
+                step["retry_count"] = 0
+                if not has_failed:
+                    first_failed_idx = idx
+                    has_failed = True
+        
+        execution.steps_data = current_steps
+        execution.current_step = first_failed_idx
+        db.commit()
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported retry strategy '{payload.strategy}'. Use 'restart' or 'resume'.")
+
+    # Launch background task
+    background_tasks.add_task(Orchestrator.run_sequence, execution.id, get_db)
     return execution
