@@ -167,42 +167,37 @@ You can pass a `callback_url` parameter in your trigger payload:
 ```
 When the sequence completes (either successfully, with partial success, or fails with an error/cancellation), the orchestrator automatically triggers a non-blocking `POST` notification back to that URL.
 
-### Callback Payload JSON Schema:
-```json
-{
-    "execution_id": "4b54e7d4-8d48-43d9-a790-db0776bdf2db",
-    "status": "COMPLETED",
-    "error_message": null,
-    "context": {
-        "client_type": "premium",
-        "credit_decision": "APPROVED"
-    },
-    "steps_data": [
-        {
-            "service_name": "todo_service",
-            "status": "COMPLETED",
-            "input_payload": {
-                "todo_id": 2
-            },
-            "output_response": {
-                "success": true,
-                "data": {
-                    "userId": 1,
-                    "id": 2,
-                    "title": "quis ut nam facilis et officia qui",
-                    "completed": true
-                },
-                "error": null,
-                "status_code": 200
-            },
-            "error_message": null,
-            "started_at": "2026-08-14T03:57:07.123456",
-            "finished_at": "2026-08-14T03:57:07.234567",
-            "duration_ms": 111,
-            "retry_count": 0
+### Webhook Dispatch Code Implementation
+Webhooks are dispatched inside the `finally` block of the orchestrator's sequence loop. To prevent slow downstream listeners from blocking the orchestrator's event loop, the callback POST request is offloaded to a thread pool executor:
+```python
+# Inside orchestrator.py: run_sequence
+finally:
+    # Remove from active tasks tracking registry
+    Orchestrator.active_tasks.pop(execution_id, None)
+    
+    if execution.callback_url:
+        callback_payload = {
+            "execution_id": execution.id,
+            "status": execution.status,
+            "error_message": execution.error_message,
+            "context": execution.context,
+            "steps_data": execution.steps_data
         }
-    ]
-}
+        try:
+            logger.info(f"Dispatching webhook notification to: {execution.callback_url}")
+            loop = asyncio.get_running_loop()
+            # Non-blocking dispatch to thread pool
+            loop.run_in_executor(
+                None,
+                lambda: requests.post(
+                    execution.callback_url, 
+                    json=callback_payload, 
+                    headers={"Content-Type": "application/json"},
+                    timeout=5.0
+                )
+            )
+        except Exception as e:
+            logger.error(f"Failed to dispatch webhook callback callback: {e}")
 ```
 
 ---
@@ -215,6 +210,36 @@ If you need to stop an active execution, call the cancel endpoint:
   * Aborts the background task immediately using native asyncio cancellation.
   * Sets the execution status in the database to `FAILED` with the message `"Cancelled by user"`.
   * Automatically triggers SAGA rollbacks (`compensate` calls) for all previously completed steps in reverse order to return systems to a consistent state.
+
+### Cancellation & SAGA Rollback Code Implementation
+When a cancellation request is received, the background task is resolved from the memory map and `.cancel()` is invoked, raising an `asyncio.CancelledError` inside the worker loop. The orchestrator catches this error and rolls back completed steps:
+```python
+# Register active task in memory registry:
+Orchestrator.active_tasks[execution_id] = asyncio.current_task()
+
+try:
+    # Run sequence steps loop...
+    for step_idx, step_item in enumerate(execution.sequence):
+        # ...
+        
+except asyncio.CancelledError:
+    logger.warning(f"Orchestration sequence '{execution_id}' cancelled by user. Rolling back completed steps...")
+    # Rollback completed steps in reverse order (SAGA Compensating Transactions)
+    for name, payload, response in reversed(completed_steps):
+        try:
+            service = ServiceRegistry.get(name)
+            client = APIClient(service_name=service.name, execution_id=execution_id, timeout=service.timeout)
+            logger.info(f"Running compensating transaction for service: {name}")
+            await service.compensate(payload=payload, response=response, client=client)
+        except Exception as comp_err:
+            logger.error(f"Saga compensation failed for service '{name}': {comp_err}")
+    
+    # Save cancelled state to DB
+    execution.status = "FAILED"
+    execution.error_message = "Cancelled by user"
+    db.commit()
+    raise  # Propagate cancellation to cleanly terminate task
+```
 
 ---
 
@@ -233,6 +258,26 @@ If a sequence failed, you can retry it using one of two strategy profiles:
   * `restart`: Clears all past run logs (`steps_data`), resets step counts to 0, and runs the entire orchestration sequence from scratch.
   * `resume`: Preserves already completed tasks in the previous failed run, sets the failed steps back to `"PENDING"`, and starts executing from the first failed step forward (avoiding double-billing on upstream APIs).
 
+### Resume Cache Code Implementation
+When resuming an execution, the orchestrator loops over all step indices. For each step, it checks the cached state in the database. If the step is already marked `COMPLETED`, the service call is skipped, and results are loaded from the cache:
+```python
+# Inside orchestrator.py: run_single_step
+async def run_single_step(service_name: str, step_idx: int):
+    # Check if this step is already completed from a previous run (Resume strategy)
+    if step_idx < len(execution.steps_data) and execution.steps_data[step_idx]["status"] == "COMPLETED":
+        logger.info(f"Resume: Skipping already completed step '{service_name}'")
+        cached_response = execution.steps_data[step_idx]["output_response"]
+        responses[service_name] = cached_response
+        cached_payload = execution.steps_data[step_idx]["input_payload"]
+        
+        # Track in completed steps array (so that it can be rolled back if a later step fails)
+        completed_steps.append((service_name, cached_payload, cached_response))
+        return True, service_name, cached_payload, cached_response, None
+
+    # Otherwise, execute service as normal...
+    service = ServiceRegistry.get(service_name)
+```
+
 ---
 
 ## 11. Resiliency Features
@@ -241,3 +286,46 @@ If a sequence failed, you can retry it using one of two strategy profiles:
 * **Exponential Backoff and Jitter**: Retries calculate delays dynamically: `delay = (base * 2^(retry_count-1)) + jitter`. This avoids overloading external systems when recovering from outages.
 * **Timeout Enforcements**: A default timeout of `10.0` seconds is applied to every client request. Services can customize timeouts by overriding the `timeout` property.
 * **Secret Injection**: The engine features a centralized `SecretResolver` in `utils.py` that automatically pulls service credentials from env variables (e.g., `TODO_SERVICE_API_KEY`) and injects them as `Authorization` headers.
+
+### Distributed Lifespan Recovery Code Implementation
+The recovery mechanism is registered in the main application lifecycle startup process. It relies on SQL atomic writes to prevent concurrent workers from claiming the same orphaned runs:
+```python
+# Inside main.py:
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup Recovery: Detect and resume pending/running executions that were interrupted.
+    # To prevent race conditions in multi-instance deployments, we atomically claim tasks using a unique worker ID.
+    import uuid
+    worker_id = str(uuid.uuid4())
+    db = SessionLocal()
+    try:
+        # Atomically claim any unclaimed PENDING or RUNNING task for this worker instance in a single write operation
+        db.query(SequenceExecution).filter(
+            SequenceExecution.status.in_(["PENDING", "RUNNING"]),
+            (SequenceExecution.error_message == None) | (~SequenceExecution.error_message.like("Recovering:%"))
+        ).update(
+            {
+                SequenceExecution.status: "PENDING",
+                SequenceExecution.error_message: f"Recovering:{worker_id}"
+            },
+            synchronize_session=False
+        )
+        db.commit()
+
+        # Query only the tasks successfully claimed by this worker
+        claimed_runs = db.query(SequenceExecution).filter(
+            SequenceExecution.error_message == f"Recovering:{worker_id}"
+        ).all()
+
+        if claimed_runs:
+            logger.info(f"Startup: Worker {worker_id} claimed {len(claimed_runs)} interrupted sequence executions. Resuming...")
+            for execution in claimed_runs:
+                # Spawn non-blocking background task to resume execution.
+                # error_message is kept as 'Recovering:{worker_id}' to serve as an active claim indicator.
+                asyncio.create_task(Orchestrator.run_sequence(execution.id, lambda: SessionLocal()))
+    except Exception as e:
+        logger.error(f"Startup: Failed to recover interrupted tasks: {e}")
+    finally:
+        db.close()
+    yield
+```
