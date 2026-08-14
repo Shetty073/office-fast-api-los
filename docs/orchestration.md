@@ -237,6 +237,7 @@ If a sequence failed, you can retry it using one of two strategy profiles:
 
 ## 11. Resiliency Features
 
+* **Lifespan Startup Recovery (Crash Resilience)**: FastAPI's startup hook (`lifespan`) automatically scans the database for any sequence execution marked as `PENDING` or `RUNNING` (which indicates it was interrupted by a server restart or crash). To support multi-instance deployments (load-balanced/autoscaled pods) without duplicating background tasks, workers execute an atomic distributed query claiming tasks using a unique `worker_id` stored inside the `error_message` field. Only the worker that successfully claims a task executes it.
 * **Exponential Backoff and Jitter**: Retries calculate delays dynamically: `delay = (base * 2^(retry_count-1)) + jitter`. This avoids overloading external systems when recovering from outages.
 * **Timeout Enforcements**: A default timeout of `10.0` seconds is applied to every client request. Services can customize timeouts by overriding the `timeout` property.
 * **Secret Injection**: The engine features a centralized `SecretResolver` in `utils.py` that automatically pulls service credentials from env variables (e.g., `TODO_SERVICE_API_KEY`) and injects them as `Authorization` headers.

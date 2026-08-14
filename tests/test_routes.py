@@ -1,5 +1,6 @@
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
+import asyncio
 from fastapi import BackgroundTasks
 from models import SequenceExecution
 
@@ -223,3 +224,97 @@ def test_retry_chain_route(client, db_session):
         data = response.json()
         assert data["status"] == "PENDING"
         assert mock_add_task.called
+
+@pytest.mark.asyncio
+async def test_lifespan_startup_recovery():
+    # Use SessionLocal directly to commit data to test_los.db file
+    from database import SessionLocal
+    db = SessionLocal()
+    
+    from models import SequenceExecution
+    import uuid
+    exec_pending_id = str(uuid.uuid4())
+    exec_running_id = str(uuid.uuid4())
+    
+    execution1 = SequenceExecution(
+        id=exec_pending_id,
+        sequence=["todo_service"],
+        inputs={},
+        mappings=[],
+        status="PENDING"
+    )
+    execution2 = SequenceExecution(
+        id=exec_running_id,
+        sequence=["todo_service"],
+        inputs={},
+        mappings=[],
+        status="RUNNING"
+    )
+    db.add(execution1)
+    db.add(execution2)
+    db.commit()
+    db.close()
+    
+    # Import lifespan from main
+    from main import lifespan
+    from fastapi import FastAPI
+    app = FastAPI()
+    
+    with patch("orchestrator.Orchestrator.run_sequence", new_callable=AsyncMock) as mock_run:
+        # Trigger the startup phase of lifespan context
+        async with lifespan(app):
+            # Give a small delay for background asyncio tasks to run
+            await asyncio.sleep(0.2)
+            assert mock_run.call_count == 2
+            
+    # Clean up created rows
+    db = SessionLocal()
+    db.query(SequenceExecution).filter(SequenceExecution.id.in_([exec_pending_id, exec_running_id])).delete()
+    db.commit()
+    db.close()
+
+@pytest.mark.asyncio
+async def test_lifespan_multi_worker_concurrency():
+    # Use SessionLocal directly to commit data
+    from database import SessionLocal
+    db = SessionLocal()
+    
+    from models import SequenceExecution
+    import uuid
+    exec_id = str(uuid.uuid4())
+    
+    execution = SequenceExecution(
+        id=exec_id,
+        sequence=["todo_service"],
+        inputs={},
+        mappings=[],
+        status="PENDING"
+    )
+    db.add(execution)
+    db.commit()
+    db.close()
+    
+    from main import lifespan
+    from fastapi import FastAPI
+    app1 = FastAPI()
+    app2 = FastAPI()
+    
+    # We will trigger lifespan concurrently for app1 and app2
+    with patch("orchestrator.Orchestrator.run_sequence", new_callable=AsyncMock) as mock_run:
+        # Run them in parallel using asyncio.gather
+        async def run_lifespan(app):
+            async with lifespan(app):
+                await asyncio.sleep(0.2)
+                
+        await asyncio.gather(
+            run_lifespan(app1),
+            run_lifespan(app2)
+        )
+        # Verify that only ONE worker succeeded in claiming and running the task
+        assert mock_run.call_count == 1
+        
+    # Clean up
+    db = SessionLocal()
+    db.query(SequenceExecution).filter(SequenceExecution.id == exec_id).delete()
+    db.commit()
+    db.close()
