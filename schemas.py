@@ -1,0 +1,46 @@
+from pydantic import BaseModel, Field
+from typing import List, Dict, Any, Optional
+from datetime import datetime
+
+class MappingSchema(BaseModel):
+    from_service: str = Field(..., description="Name of the source service")
+    from_field: str = Field(..., description="Dot-notated path of the output field to copy")
+    to_service: str = Field(..., description="Name of the target service")
+    to_field: str = Field(..., description="Dot-notated path of the input field to populate")
+
+class SequenceTriggerSchema(BaseModel):
+    sequence: List[str] = Field(..., description="Ordered list of service names to run")
+    inputs: Dict[str, Dict[str, Any]] = Field(
+        default_factory=dict, 
+        description="Initial payload mapping for services (service_name -> payload dict)"
+    )
+    mappings: List[MappingSchema] = Field(
+        default_factory=list,
+        description="Data mapping definitions between services in the sequence"
+    )
+
+class StepExecutionSchema(BaseModel):
+    service_name: str
+    status: str
+    input_payload: Dict[str, Any]
+    output_response: Optional[Dict[str, Any]] = None
+    error_message: Optional[str] = None
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    duration_ms: Optional[int] = None
+    retry_count: Optional[int] = None
+
+class SequenceExecutionResponseSchema(BaseModel):
+    id: str
+    sequence: List[str]
+    inputs: Dict[str, Dict[str, Any]]
+    mappings: List[MappingSchema]
+    status: str
+    current_step: int
+    steps_data: List[StepExecutionSchema]
+    error_message: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
