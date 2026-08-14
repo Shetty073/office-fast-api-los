@@ -9,6 +9,12 @@ class TodoService(BaseService):
     def name(self) -> str:
         return "todo_service"
 
+    @property
+    def success_conditions(self) -> Dict[str, Any]:
+        return {
+            "status_codes": [200]
+        }
+
     # mock_enabled is False by default
 
     def get_mock_response(self, payload: Dict[str, Any]) -> Dict[str, Any]:

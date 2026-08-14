@@ -49,7 +49,8 @@ async def trigger_chain(
             db=db,
             sequence=payload.sequence,
             inputs=payload.inputs,
-            mappings=payload.mappings
+            mappings=payload.mappings,
+            success_conditions=payload.success_conditions
         )
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))

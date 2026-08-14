@@ -3,7 +3,7 @@ import time
 import asyncio
 import logging
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 from models import SequenceExecution
 from services.registry import ServiceRegistry
@@ -17,7 +17,8 @@ class Orchestrator:
         db: Session, 
         sequence: List[str], 
         inputs: Dict[str, Any], 
-        mappings: List[Any]
+        mappings: List[Any],
+        success_conditions: Optional[Dict[str, Dict[str, Any]]] = None
     ) -> SequenceExecution:
         """
         Validate services exist, initialize the sequence execution model and save to the DB.
@@ -44,6 +45,7 @@ class Orchestrator:
             sequence=sequence,
             inputs=inputs,
             mappings=serialized_mappings,
+            success_conditions=success_conditions,
             status="PENDING",
             current_step=0,
             steps_data=[]
@@ -135,10 +137,15 @@ class Orchestrator:
                     db.commit()
 
                     try:
+                        conditions = None
+                        if execution.success_conditions and isinstance(execution.success_conditions, dict):
+                            conditions = execution.success_conditions.get(service_name)
+
                         service_response = await service.execute(
                             payload=payload, 
                             execution_id=execution_id, 
-                            mock_override=mock_override
+                            mock_override=mock_override,
+                            success_conditions=conditions
                         )
                         if service_response.get("success"):
                             step_success = True

@@ -18,6 +18,10 @@ class SequenceTriggerSchema(BaseModel):
         default_factory=list,
         description="Data mapping definitions between services in the sequence"
     )
+    success_conditions: Optional[Dict[str, Dict[str, Any]]] = Field(
+        default=None,
+        description="Optional success condition overrides for services (service_name -> conditions dict)"
+    )
 
 class StepExecutionSchema(BaseModel):
     service_name: str
@@ -35,6 +39,7 @@ class SequenceExecutionResponseSchema(BaseModel):
     sequence: List[str]
     inputs: Dict[str, Dict[str, Any]]
     mappings: List[MappingSchema]
+    success_conditions: Optional[Dict[str, Dict[str, Any]]] = None
     status: str
     current_step: int
     steps_data: List[StepExecutionSchema]

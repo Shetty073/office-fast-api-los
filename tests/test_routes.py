@@ -126,3 +126,27 @@ def test_get_chain_status_not_found(client):
     response = client.get("/api/chain/status/uuid-does-not-exist")
     assert response.status_code == 404
     assert "not found" in response.json()["detail"]
+
+def test_trigger_chain_with_success_conditions(client):
+    payload = {
+        "sequence": ["todo_service"],
+        "inputs": {
+            "todo_service": {"todo_id": 1, "_mock": True}
+        },
+        "mappings": [],
+        "success_conditions": {
+            "todo_service": {
+                "status_codes": [200],
+                "body_rules": {
+                    "data.completed": True
+                }
+            }
+        }
+    }
+    with patch("fastapi.BackgroundTasks.add_task") as mock_add_task:
+        response = client.post("/api/chain/trigger", json=payload)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "PENDING"
+        assert data["success_conditions"]["todo_service"]["status_codes"] == [200]
+        assert mock_add_task.called

@@ -255,3 +255,68 @@ async def test_orchestrator_outer_exception_handling(db_session, db_session_fact
     assert reloaded.status == "FAILED"
     assert "Database commit error" in reloaded.error_message
 
+
+@pytest.mark.asyncio
+async def test_success_conditions_default_success(db_session, db_session_factory):
+    # TodoService has a default success condition: data.completed == True
+    # In mock mode, todo_service returns completed = True, so it passes.
+    exec_obj = Orchestrator.create_execution(
+        db=db_session,
+        sequence=["todo_service"],
+        inputs={"todo_service": {"todo_id": 1, "_mock": True}},
+        mappings=[]
+    )
+    await Orchestrator.run_sequence(exec_obj.id, db_session_factory)
+    db_session.expire_all()
+    reloaded = db_session.query(SequenceExecution).filter(SequenceExecution.id == exec_obj.id).first()
+    assert reloaded.status == "COMPLETED"
+    step = reloaded.steps_data[0]
+    assert step["status"] == "COMPLETED"
+
+@pytest.mark.asyncio
+async def test_success_conditions_dynamic_body_failure(db_session, db_session_factory):
+    # Request that todo_service data.completed is False, but mock returns True
+    exec_obj = Orchestrator.create_execution(
+        db=db_session,
+        sequence=["todo_service"],
+        inputs={"todo_service": {"todo_id": 1, "_mock": True}},
+        mappings=[],
+        success_conditions={
+            "todo_service": {
+                "status_codes": [200],
+                "body_rules": {
+                    "data.completed": False
+                }
+            }
+        }
+    )
+    await Orchestrator.run_sequence(exec_obj.id, db_session_factory)
+    db_session.expire_all()
+    reloaded = db_session.query(SequenceExecution).filter(SequenceExecution.id == exec_obj.id).first()
+    assert reloaded.status == "FAILED"
+    step = reloaded.steps_data[0]
+    assert step["status"] == "FAILED"
+    assert "Success condition failed: key 'data.completed' expected False, got True" in step["error_message"]
+
+@pytest.mark.asyncio
+async def test_success_conditions_dynamic_status_code_failure(db_session, db_session_factory):
+    # Request status code to be 201, but service execution returns 200
+    exec_obj = Orchestrator.create_execution(
+        db=db_session,
+        sequence=["todo_service"],
+        inputs={"todo_service": {"todo_id": 1, "_mock": True}},
+        mappings=[],
+        success_conditions={
+            "todo_service": {
+                "status_codes": [201]
+            }
+        }
+    )
+    await Orchestrator.run_sequence(exec_obj.id, db_session_factory)
+    db_session.expire_all()
+    reloaded = db_session.query(SequenceExecution).filter(SequenceExecution.id == exec_obj.id).first()
+    assert reloaded.status == "FAILED"
+    step = reloaded.steps_data[0]
+    assert step["status"] == "FAILED"
+    assert "Success condition failed: status code 200 not in [201]" in step["error_message"]
+

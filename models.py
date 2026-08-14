@@ -9,6 +9,7 @@ class SequenceExecution(Base):
     sequence = Column(JSON, nullable=False)  # List of service names
     inputs = Column(JSON, nullable=False)    # Dict of input payloads per service
     mappings = Column(JSON, nullable=False)  # List of dict mappings
+    success_conditions = Column(JSON, nullable=True)  # Dict of success conditions per service
     status = Column(String(20), default="PENDING")  # PENDING, RUNNING, COMPLETED, PARTIAL_SUCCESS, FAILED
     current_step = Column(Integer, default=0)
     steps_data = Column(JSON, default=list)  # Step tracking (JSON serialization)
