@@ -50,15 +50,17 @@ async def trigger_chain(
             sequence=payload.sequence,
             inputs=payload.inputs,
             mappings=payload.mappings,
-            success_conditions=payload.success_conditions
+            success_conditions=payload.success_conditions,
+            idempotency_key=payload.idempotency_key
         )
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # Hand off execution to background task worker
-    background_tasks.add_task(Orchestrator.run_sequence, execution.id, get_db)
+    # Hand off execution to background task worker if the execution is brand new
+    if getattr(execution, "_is_new", True):
+        background_tasks.add_task(Orchestrator.run_sequence, execution.id, get_db)
     return execution
 
 @router.get("/chain/status/{execution_id}", response_model=SequenceExecutionResponseSchema)

@@ -1,6 +1,6 @@
 import pytest
 import asyncio
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from sqlalchemy.orm import Session
 from models import SequenceExecution
 from orchestrator import Orchestrator
@@ -319,4 +319,89 @@ async def test_success_conditions_dynamic_status_code_failure(db_session, db_ses
     step = reloaded.steps_data[0]
     assert step["status"] == "FAILED"
     assert "Success condition failed: status code 200 not in [201]" in step["error_message"]
+
+
+@pytest.mark.asyncio
+async def test_parallel_execution(db_session, db_session_factory):
+    # Pass parallel sequence: [["todo_service", "post_service"]]
+    exec_obj = Orchestrator.create_execution(
+        db=db_session,
+        sequence=[["todo_service", "post_service"]],
+        inputs={
+            "todo_service": {"todo_id": 1, "_mock": True},
+            "post_service": {"title": "Title", "body": "Body", "_mock": True}
+        },
+        mappings=[]
+    )
+    await Orchestrator.run_sequence(exec_obj.id, db_session_factory)
+    db_session.expire_all()
+    reloaded = db_session.query(SequenceExecution).filter(SequenceExecution.id == exec_obj.id).first()
+    assert reloaded.status == "COMPLETED"
+    assert len(reloaded.steps_data) == 2
+    assert reloaded.steps_data[0]["status"] == "COMPLETED"
+    assert reloaded.steps_data[1]["status"] == "COMPLETED"
+
+@pytest.mark.asyncio
+async def test_saga_rollback_compensation(db_session, db_session_factory):
+    # Sequence: todo_service succeeds (mocked), crit_fail_svc fails
+    # We expect todo_service to undergo compensation.
+    @register_service
+    class CriticalFailSvc(BaseService):
+        @property
+        def name(self) -> str:
+            return "crit_fail_svc"
+        async def _run(self, payload: dict, client: APIClient):
+            return {"success": False, "error": "Forced failure", "status_code": 500}
+
+    exec_obj = Orchestrator.create_execution(
+        db=db_session,
+        sequence=["todo_service", "crit_fail_svc"],
+        inputs={
+            "todo_service": {"todo_id": 1, "_mock": True},
+            "crit_fail_svc": {}
+        },
+        mappings=[]
+    )
+    
+    # We will spy on the compensate method of TodoService
+    with patch("services.todo_service.TodoService.compensate", new_callable=AsyncMock if hasattr(pytest, "AsyncMock") else MagicMock) as mock_compensate:
+        # standard MagicMock patch works for async if we mock return value or if we don't await the mock directly,
+        # but since we await it inside orchestrator we can make it an AsyncMock or mock coroutine
+        async def async_mock(*args, **kwargs):
+            pass
+        mock_compensate.side_effect = async_mock
+        await Orchestrator.run_sequence(exec_obj.id, db_session_factory)
+        assert mock_compensate.called
+        
+    db_session.expire_all()
+    reloaded = db_session.query(SequenceExecution).filter(SequenceExecution.id == exec_obj.id).first()
+    assert reloaded.status == "FAILED"
+    assert len(reloaded.steps_data) == 2
+
+def test_idempotency_deduplication(db_session):
+    # Trigger 1
+    exec1 = Orchestrator.create_execution(
+        db=db_session,
+        sequence=["todo_service"],
+        inputs={},
+        mappings=[],
+        idempotency_key="unique-idemp-123"
+    )
+    
+    # Trigger 2 with same idempotency key
+    exec2 = Orchestrator.create_execution(
+        db=db_session,
+        sequence=["todo_service"],
+        inputs={},
+        mappings=[],
+        idempotency_key="unique-idemp-123"
+    )
+    
+    assert exec1.id == exec2.id
+
+def test_secret_header_injection(monkeypatch):
+    monkeypatch.setenv("TEST_SERVICE_API_KEY", "prod-key-12345")
+    from utils import SecretResolver
+    headers = SecretResolver.get_auth_headers("test_service")
+    assert headers["Authorization"] == "Bearer prod-key-12345"
 

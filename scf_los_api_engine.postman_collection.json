@@ -92,13 +92,13 @@
       "response": []
     },
     {
-      "name": "Standalone Service - Post Service (Mock)",
+      "name": "Trigger Chain - Sequential with Idempotency",
       "request": {
         "method": "POST",
         "header": [],
         "body": {
           "mode": "raw",
-          "raw": "{\n    \"title\": \"Custom Mock Title\",\n    \"body\": \"Custom Mock Body Content\",\n    \"userId\": 1\n}",
+          "raw": "{\n    \"sequence\": [\n        \"todo_service\",\n        \"post_service\"\n    ],\n    \"inputs\": {\n        \"todo_service\": {\n            \"todo_id\": 2\n        },\n        \"post_service\": {\n            \"body\": \"Sequential execution body text\",\n            \"userId\": 5\n        }\n    },\n    \"mappings\": [\n        {\n            \"from_service\": \"todo_service\",\n            \"from_field\": \"title\",\n            \"to_service\": \"post_service\",\n            \"to_field\": \"title\"\n        }\n    ],\n    \"idempotency_key\": \"idemp-key-example-1234\"\n}",
           "options": {
             "raw": {
               "language": "json"
@@ -106,67 +106,27 @@
           }
         },
         "url": {
-          "raw": "{{base_url}}/api/standalone/post_service?mock=true",
+          "raw": "{{base_url}}/api/chain/trigger",
           "host": [
             "{{base_url}}"
           ],
           "path": [
             "api",
-            "standalone",
-            "post_service"
-          ],
-          "query": [
-            {
-              "key": "mock",
-              "value": "true"
-            }
+            "chain",
+            "trigger"
           ]
         }
       },
       "response": []
     },
     {
-      "name": "Standalone Service - Post Service (Real)",
+      "name": "Trigger Chain - Parallel Execution (Fork-Join)",
       "request": {
         "method": "POST",
         "header": [],
         "body": {
           "mode": "raw",
-          "raw": "{\n    \"title\": \"Real API Test Post\",\n    \"body\": \"Body of the real API test post\",\n    \"userId\": 1\n}",
-          "options": {
-            "raw": {
-              "language": "json"
-            }
-          }
-        },
-        "url": {
-          "raw": "{{base_url}}/api/standalone/post_service?mock=false",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "api",
-            "standalone",
-            "post_service"
-          ],
-          "query": [
-            {
-              "key": "mock",
-              "value": "false"
-            }
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Trigger Chain - (Todo -> Post)",
-      "request": {
-        "method": "POST",
-        "header": [],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n    \"sequence\": [\n        \"todo_service\",\n        \"post_service\"\n    ],\n    \"inputs\": {\n        \"todo_service\": {\n            \"todo_id\": 2\n        },\n        \"post_service\": {\n            \"body\": \"Chained execution body text\",\n            \"userId\": 5\n        }\n    },\n    \"mappings\": [\n        {\n            \"from_service\": \"todo_service\",\n            \"from_field\": \"title\",\n            \"to_service\": \"post_service\",\n            \"to_field\": \"title\"\n        }\n    ]\n}",
+          "raw": "{\n    \"sequence\": [\n        \"todo_service\",\n        [\n            \"post_service\"\n        ]\n    ],\n    \"inputs\": {\n        \"todo_service\": {\n            \"todo_id\": 1\n        },\n        \"post_service\": {\n            \"title\": \"Parallel Run Title\",\n            \"body\": \"Parallel execution body text\",\n            \"userId\": 1\n        }\n    },\n    \"mappings\": []\n}",
           "options": {
             "raw": {
               "language": "json"

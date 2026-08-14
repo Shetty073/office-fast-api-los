@@ -1,19 +1,79 @@
 # Orchestration Engine
 
-The **SCF LOS Orchestration Engine** is designed to execute sequences of third-party API services asynchronously. It enables data passing (chaining) between steps, automatic retries, and comprehensive performance logging.
+The **SCF LOS Orchestration Engine** executes sequences of third-party API services asynchronously. It supports sequential and parallel flows, Saga pattern rollbacks, idempotency deduplication, exponential backoff, request timeouts, and credentials resolution.
 
 ---
 
-## Architecture Overview
+## 1. Architecture Overview
 
 The orchestration workflow consists of:
-1. **Trigger API (`POST /api/chain/trigger`)**: Receives the sequence of service names, initial inputs, and inter-service field mappings. It creates a database execution record and triggers the execution in a background worker thread using FastAPI's `BackgroundTasks`.
-2. **Orchestrator (`orchestrator.py`)**: Manages the step-by-step lifecycle of the sequence. It copies static inputs, resolves field mappings from previous step outputs, runs services, and handles partial success or critical failures.
-3. **Execution Schema (`database.db`)**: Saves the status (`PENDING`, `RUNNING`, `COMPLETED`, `PARTIAL_SUCCESS`, `FAILED`) and step latency data into `SequenceExecution`.
+1. **Trigger API (`POST /api/chain/trigger`)**: Receives the sequence, inputs, mappings, success conditions, and an optional idempotency key.
+2. **Orchestrator (`orchestrator.py`)**: Executes steps in a background worker context via FastAPI's `BackgroundTasks`. It parses parallel/sequential steps, applies data mappings, enforces retry limits, and handles failures.
+3. **Database Logging**: Execution records are stored in the `sequence_executions` table, and all individual HTTP calls are logged to the `api_logs` table.
 
 ---
 
-## Inter-Service Data Mapping
+## 2. Parallel Execution (Fork-Join)
+
+To run multiple steps concurrently, nest their names in a sub-list within the `sequence` payload:
+```json
+{
+    "sequence": [
+        "todo_service",
+        ["post_service", "another_service"]
+    ]
+}
+```
+*In this sequence:*
+1. `todo_service` runs sequentially.
+2. `post_service` and `another_service` execute concurrently using `asyncio.gather()`.
+
+> [!NOTE]
+> Services in a parallel block execute concurrently, meaning they cannot map data from one another. They can only map from steps that completed *before* the parallel block started.
+
+---
+
+## 3. Saga Pattern (Rollback Compensations)
+
+If a critical step fails (e.g. downstream service error or maximum retries exceeded), the orchestrator transitions to the `FAILED` status and automatically rolls back all previously successfully completed steps in **reverse order**.
+
+* Each service class implements its own rollback logic inside the `compensate` method:
+  ```python
+  async def compensate(self, payload: Dict[str, Any], response: Dict[str, Any], client: APIClient) -> None:
+      # e.g., perform a DELETE request to undo the resource creation
+  ```
+
+---
+
+## 4. Idempotency & Deduplication
+
+To prevent duplicate runs (e.g. from network retries), pass a unique `idempotency_key` string:
+```json
+{
+    "sequence": ["todo_service"],
+    "inputs": {"todo_service": {"todo_id": 1}},
+    "idempotency_key": "unique-uuid-123456"
+}
+```
+* If a duplicate key is detected, the API returns the existing record immediately.
+* If the task is already `RUNNING` or `COMPLETED`, it will not launch a duplicate background task, protecting downstream systems from redundant API costs.
+
+---
+
+## 5. Resiliency Features
+
+* **Exponential Backoff and Jitter**: Retries calculate delays dynamically: `delay = (base * 2^(retry_count-1)) + jitter`. This avoids overloading external systems when recovering from outages.
+* **Timeout Enforcements**: A default timeout of `10.0` seconds is applied to every client request. Services can customize timeouts by overriding the `timeout` property:
+  ```python
+  @property
+  def timeout(self) -> float:
+      return 5.0 # 5 seconds
+  ```
+* **Secret Injection**: The engine features a centralized `SecretResolver` in `utils.py` that automatically pulls service credentials from env variables (e.g., `TODO_SERVICE_API_KEY`) and injects them as `Authorization` headers.
+
+---
+
+## 6. Inter-Service Data Mapping
 
 To pass outputs from a previous API as inputs to the next API in a sequence, define mappings in the `mappings` list of your trigger payload.
 
@@ -23,9 +83,6 @@ Each mapping rule is an object:
 * `from_field`: The dot-notated path to resolve inside the source service's **response data block** (`response["data"]`).
 * `to_service`: The name of the target service (e.g. `"post_service"`).
 * `to_field`: The dot-notated path in the target service's input payload to populate.
-
-### Where to Define Mappings
-Mappings are defined dynamically in the trigger request body.
 
 #### Example Payload:
 ```json
@@ -52,22 +109,3 @@ Mappings are defined dynamically in the trigger request body.
     ]
 }
 ```
-*In this example:*
-1. `todo_service` runs first. Its output `data` block is:
-   ```json
-   {
-       "userId": 1,
-       "id": 2,
-       "title": "quis ut nam facilis et officia qui",
-       "completed": false
-   }
-   ```
-2. The orchestrator extracts `"title"` (since `from_field` is `"title"`).
-3. It merges/writes that value into the `post_service` payload at key `"title"` (since `to_field` is `"title"`).
-4. `post_service` executes with:
-   ```json
-   {
-       "title": "quis ut nam facilis et officia qui",
-       "body": "Static post description"
-   }
-   ```

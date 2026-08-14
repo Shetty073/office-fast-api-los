@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
 
 class MappingSchema(BaseModel):
@@ -9,7 +9,7 @@ class MappingSchema(BaseModel):
     to_field: str = Field(..., description="Dot-notated path of the input field to populate")
 
 class SequenceTriggerSchema(BaseModel):
-    sequence: List[str] = Field(..., description="Ordered list of service names to run")
+    sequence: List[Union[str, List[str]]] = Field(..., description="Ordered list of service names to run. Nested lists run in parallel.")
     inputs: Dict[str, Dict[str, Any]] = Field(
         default_factory=dict, 
         description="Initial payload mapping for services (service_name -> payload dict)"
@@ -21,6 +21,10 @@ class SequenceTriggerSchema(BaseModel):
     success_conditions: Optional[Dict[str, Dict[str, Any]]] = Field(
         default=None,
         description="Optional success condition overrides for services (service_name -> conditions dict)"
+    )
+    idempotency_key: Optional[str] = Field(
+        default=None,
+        description="Unique key to prevent duplicate runs of the same orchestration."
     )
 
 class StepExecutionSchema(BaseModel):
@@ -36,10 +40,11 @@ class StepExecutionSchema(BaseModel):
 
 class SequenceExecutionResponseSchema(BaseModel):
     id: str
-    sequence: List[str]
+    sequence: List[Union[str, List[str]]]
     inputs: Dict[str, Dict[str, Any]]
     mappings: List[MappingSchema]
     success_conditions: Optional[Dict[str, Dict[str, Any]]] = None
+    idempotency_key: Optional[str] = None
     status: str
     current_step: int
     steps_data: List[StepExecutionSchema]

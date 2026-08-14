@@ -63,3 +63,10 @@ class PostService(BaseService):
             "error": f"Failed to create post. Third-party status: {response.status_code}",
             "status_code": response.status_code
         }
+
+    async def compensate(self, payload: Dict[str, Any], response: Dict[str, Any], client: APIClient) -> None:
+        """Simulate Saga compensating rollback transaction by deleting the created post."""
+        post_id = 101
+        if response and isinstance(response, dict) and "data" in response and isinstance(response["data"], dict):
+            post_id = response["data"].get("id", post_id)
+        client.delete(f"https://jsonplaceholder.typicode.com/posts/{post_id}")

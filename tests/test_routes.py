@@ -150,3 +150,27 @@ def test_trigger_chain_with_success_conditions(client):
         assert data["status"] == "PENDING"
         assert data["success_conditions"]["todo_service"]["status_codes"] == [200]
         assert mock_add_task.called
+
+def test_trigger_chain_idempotency(client):
+    payload = {
+        "sequence": ["todo_service"],
+        "inputs": {
+            "todo_service": {"todo_id": 1, "_mock": True}
+        },
+        "mappings": [],
+        "idempotency_key": "idemp-key-route-abc"
+    }
+    with patch("fastapi.BackgroundTasks.add_task") as mock_add_task:
+        # First request creates it and launches background task
+        response1 = client.post("/api/chain/trigger", json=payload)
+        assert response1.status_code == 200
+        data1 = response1.json()
+        assert data1["status"] == "PENDING"
+        assert mock_add_task.call_count == 1
+        
+        # Second request with same idempotency key returns the same execution object but doesn't launch task again
+        response2 = client.post("/api/chain/trigger", json=payload)
+        assert response2.status_code == 200
+        data2 = response2.json()
+        assert data2["id"] == data1["id"]
+        assert mock_add_task.call_count == 1 # still 1!

@@ -289,16 +289,37 @@ def test_api_client_verbs():
     mock_resp.text = "OK"
     with patch("requests.request", return_value=mock_resp) as mock_req:
         client.put("https://test.url/put")
-        mock_req.assert_called_with("PUT", "https://test.url/put")
+        mock_req.assert_called_with(
+            "PUT",
+            "https://test.url/put",
+            timeout=10.0,
+            headers={"Authorization": "Bearer mock-key-for-test_verbs"}
+        )
         
         client.delete("https://test.url/delete")
-        mock_req.assert_called_with("DELETE", "https://test.url/delete")
+        mock_req.assert_called_with(
+            "DELETE",
+            "https://test.url/delete",
+            timeout=10.0,
+            headers={"Authorization": "Bearer mock-key-for-test_verbs"}
+        )
         
         client.patch("https://test.url/patch")
-        mock_req.assert_called_with("PATCH", "https://test.url/patch")
+        mock_req.assert_called_with(
+            "PATCH",
+            "https://test.url/patch",
+            timeout=10.0,
+            headers={"Authorization": "Bearer mock-key-for-test_verbs"}
+        )
 
         client.post("https://test.url/post", data="raw-body")
-        mock_req.assert_called_with("POST", "https://test.url/post", data="raw-body")
+        mock_req.assert_called_with(
+            "POST",
+            "https://test.url/post",
+            data="raw-body",
+            timeout=10.0,
+            headers={"Authorization": "Bearer mock-key-for-test_verbs"}
+        )
 
 def test_api_client_logger_failure():
     with patch("utils.SessionLocal", side_effect=RuntimeError("Logging DB crashed")):

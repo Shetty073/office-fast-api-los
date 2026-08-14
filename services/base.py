@@ -25,6 +25,18 @@ class BaseService(ABC):
         return True
 
     @property
+    def timeout(self) -> float:
+        """Default request timeout for the service integration."""
+        return 10.0
+
+    async def compensate(self, payload: Dict[str, Any], response: Dict[str, Any], client: APIClient) -> None:
+        """
+        Compensating transaction logic (Saga Rollback) for this service.
+        Override in subclasses to delete created resources, cancel applications, etc.
+        """
+        pass
+
+    @property
     def success_conditions(self) -> Optional[Dict[str, Any]]:
         """
         Statically defined default success conditions for the service.
@@ -71,7 +83,7 @@ class BaseService(ABC):
                 }
         else:
             # Real execution using DB-logging client
-            client = APIClient(service_name=self.name, execution_id=execution_id)
+            client = APIClient(service_name=self.name, execution_id=execution_id, timeout=self.timeout)
             try:
                 result = await self._run(payload, client)
                 # Ensure compliance with standard response dictionary format

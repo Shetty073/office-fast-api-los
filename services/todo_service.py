@@ -55,3 +55,9 @@ class TodoService(BaseService):
             "error": f"Failed to fetch todo. Third-party status: {response.status_code}",
             "status_code": response.status_code
         }
+
+    async def compensate(self, payload: Dict[str, Any], response: Dict[str, Any], client: APIClient) -> None:
+        """Simulate Saga compensating rollback transaction."""
+        todo_id = payload.get("todo_id")
+        # Log the delete action using client wrapper to record the compensation
+        client.delete(f"https://jsonplaceholder.typicode.com/todos/{todo_id}")

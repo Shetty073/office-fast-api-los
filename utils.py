@@ -45,20 +45,52 @@ def set_by_path(d: Dict[str, Any], path: str, value: Any) -> None:
     curr[parts[-1]] = value
 
 
+class SecretResolver:
+    @staticmethod
+    def get_auth_headers(service_name: str) -> Dict[str, str]:
+        """
+        Retrieve authentication headers for a given service.
+        In production, this would integrate with Vault or AWS Secrets Manager.
+        Here we check environment variables: e.g. TODO_SERVICE_API_KEY.
+        If missing, we return a mock authorization header.
+        """
+        import os
+        env_key = f"{service_name.upper()}_API_KEY"
+        api_key = os.getenv(env_key)
+        if api_key:
+            return {"Authorization": f"Bearer {api_key}"}
+        return {"Authorization": f"Bearer mock-key-for-{service_name}"}
+
+
 class APIClient:
     """
     Utility wrapper around python requests library.
     Exposes requests functions and logs every request & response detail into the database.
     """
-    def __init__(self, service_name: str, execution_id: Optional[str] = None):
+    def __init__(self, service_name: str, execution_id: Optional[str] = None, timeout: float = 10.0):
         self.service_name = service_name
         self.execution_id = execution_id
+        self.default_timeout = timeout
 
     def request(self, method: str, url: str, **kwargs) -> requests.Response:
         start_time = time.time()
 
-        # Extract payload information safely for logs
+        # Inject default timeout if not specified
+        if "timeout" not in kwargs:
+            kwargs["timeout"] = self.default_timeout
+
+        # Inject authentication headers if not specified
         req_headers = kwargs.get("headers", {})
+        if req_headers is None:
+            req_headers = {}
+        else:
+            req_headers = dict(req_headers)
+        if "Authorization" not in req_headers:
+            auth_headers = SecretResolver.get_auth_headers(self.service_name)
+            req_headers.update(auth_headers)
+            kwargs["headers"] = req_headers
+
+        # Extract payload information safely for logs
         req_body = None
         if "json" in kwargs:
             req_body = json.dumps(kwargs["json"])
