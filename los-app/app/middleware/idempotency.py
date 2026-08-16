@@ -30,6 +30,24 @@ class HashIdempotencyMiddleware(BaseHTTPMiddleware):
         if request.url.path.startswith("/api/auth/login"):
             return await call_next(request)
 
+        # Determine effective idempotency window
+        effective_window_ms = self.window_ms
+
+        # Check if this is a standalone service endpoint (/api/standalone/{service_name})
+        path_parts = request.url.path.strip("/").split("/")
+        if len(path_parts) >= 3 and path_parts[0] == "api" and path_parts[1] == "standalone":
+            service_name = path_parts[2]
+            try:
+                from app.services.registry import ServiceRegistry
+                service = ServiceRegistry.get(service_name)
+                effective_window_ms = service.idempotency_window_ms
+            except Exception:
+                effective_window_ms = self.window_ms
+
+        # If idempotency is disabled for this service (window_ms <= 0), bypass checking
+        if effective_window_ms <= 0:
+            return await call_next(request)
+
         body_bytes = await request.body()
         app_name = client_app_ctx.get()
         
@@ -40,18 +58,18 @@ class HashIdempotencyMiddleware(BaseHTTPMiddleware):
 
         try:
             redis = await get_arq_redis()
-            # Set key with millisecond expiration (px=window_ms), only if key does not exist (nx=True)
-            # arq.ArqRedis wraps redis-py async client
-            acquired = await redis.set(redis_key, "PROCESSING", px=self.window_ms, nx=True)
+            # Set key with millisecond expiration (px=effective_window_ms), only if key does not exist (nx=True)
+            acquired = await redis.set(redis_key, "PROCESSING", px=effective_window_ms, nx=True)
             
             if not acquired:
-                logger.warning(f"Duplicate request detected within {self.window_ms}ms window (Hash: {req_hash[:12]})")
+                logger.warning(f"Duplicate request detected within {effective_window_ms}ms window (Hash: {req_hash[:12]})")
                 return JSONResponse(
                     status_code=409,
                     content={
-                        "detail": f"Duplicate request rejected. A matching request was submitted within the {self.window_ms}ms idempotency window.",
+                        "detail": f"Duplicate request rejected. A matching request was submitted within the {effective_window_ms}ms idempotency window.",
                         "error_code": "DUPLICATE_REQUEST_BLOCKED",
-                        "idempotency_hash": req_hash
+                        "idempotency_hash": req_hash,
+                        "window_ms": effective_window_ms
                     }
                 )
         except Exception as e:

@@ -29,6 +29,15 @@ class BaseService(ABC):
         """Default request timeout for the service integration."""
         return 10.0
 
+    @property
+    def idempotency_window_ms(self) -> int:
+        """
+        Deduplication window in milliseconds for this service.
+        Default is 5000ms. Override in subclass to customize.
+        Set to 0 to disable idempotency checking for this service.
+        """
+        return 5000
+
     async def compensate(self, payload: Dict[str, Any], response: Dict[str, Any], client: APIClient) -> None:
         """Compensating transaction logic (Saga Rollback)."""
         pass

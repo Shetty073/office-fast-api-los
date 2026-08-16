@@ -169,6 +169,23 @@ def test_hash_idempotency_middleware(client):
         assert res2.status_code == 409
         assert "Duplicate request rejected" in res2.json()["detail"]
 
+def test_hash_idempotency_disabled_when_window_zero(client):
+    from app.services.registry import ServiceRegistry
+    service = ServiceRegistry.get("create_post_service")
+    original_window = service.idempotency_window_ms
+    
+    try:
+        # Override to 0 (disabled)
+        type(service).idempotency_window_ms = property(lambda self: 0)
+        mock_redis = AsyncMock()
+        with patch("app.middleware.idempotency.get_arq_redis", return_value=mock_redis):
+            res = client.post("/api/standalone/create_post_service?mock=true", json={"title": "No Window"})
+            assert res.status_code == 200
+            # Redis set should not have been called when disabled
+            assert mock_redis.set.call_count == 0
+    finally:
+        type(service).idempotency_window_ms = property(lambda self: original_window)
+
 def test_unauthenticated_request_blocked(unauthenticated_client):
     """Ensure all business endpoints strictly reject requests without Bearer token (401 Unauthorized)."""
     res1 = unauthenticated_client.post("/api/standalone/create_post_service", json={"title": "T1"})
