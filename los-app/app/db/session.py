@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, inspect
 from sqlalchemy.orm import sessionmaker
 from app.core import config
 from app.db.base import Base
@@ -34,6 +34,38 @@ if config.DATABASE_URL.startswith("sqlite"):
 
 engine = create_engine(config.DATABASE_URL, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+def auto_migrate_columns():
+    """Automatically adds newly declared model columns to existing relational tables if missing."""
+    try:
+        inspector = inspect(engine)
+        tables = inspector.get_table_names()
+        is_pg = "postgresql" in config.DATABASE_URL
+        is_sqlite = config.DATABASE_URL.startswith("sqlite")
+        json_type = "JSONB" if is_pg else ("JSON" if not is_sqlite else "TEXT")
+
+        with engine.begin() as conn:
+            if "sequence_definitions" in tables:
+                cols = [c["name"] for c in inspector.get_columns("sequence_definitions")]
+                if "skip_conditions" not in cols:
+                    conn.execute(text(f"ALTER TABLE sequence_definitions ADD COLUMN skip_conditions {json_type}"))
+                if "success_conditions" not in cols:
+                    conn.execute(text(f"ALTER TABLE sequence_definitions ADD COLUMN success_conditions {json_type}"))
+                if "conditions" not in cols:
+                    conn.execute(text(f"ALTER TABLE sequence_definitions ADD COLUMN conditions {json_type}"))
+
+            if "sequence_executions" in tables:
+                cols = [c["name"] for c in inspector.get_columns("sequence_executions")]
+                if "skip_conditions" not in cols:
+                    conn.execute(text(f"ALTER TABLE sequence_executions ADD COLUMN skip_conditions {json_type}"))
+                if "success_conditions" not in cols:
+                    conn.execute(text(f"ALTER TABLE sequence_executions ADD COLUMN success_conditions {json_type}"))
+                if "conditions" not in cols:
+                    conn.execute(text(f"ALTER TABLE sequence_executions ADD COLUMN conditions {json_type}"))
+                if "trigger_payload" not in cols:
+                    conn.execute(text(f"ALTER TABLE sequence_executions ADD COLUMN trigger_payload {json_type}"))
+    except Exception as e:
+        print(f"Column auto-migration bypassed/notice: {e}")
 
 def get_db():
     db = SessionLocal()

@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from app.db.base import Base
-from app.db.session import engine
+from app.db.session import engine, auto_migrate_columns
 from app.api.router import api_router
 from app.services.registry import ServiceRegistry
 from app.core.redis_pool import init_redis_pool, close_redis_pool
@@ -19,6 +19,7 @@ logger = setup_logger("los_app")
 
 # Automate DB table schema migrations/creations at startup
 Base.metadata.create_all(bind=engine)
+auto_migrate_columns()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
