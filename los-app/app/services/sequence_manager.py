@@ -73,9 +73,47 @@ class SequenceManager:
         trigger_payload: Optional[Dict[str, Any]] = None,
         inputs_override: Optional[Dict[str, Dict[str, Any]]] = None,
         idempotency_key: Optional[str] = None,
+        previous_task_id: Optional[str] = None,
         context: Optional[Dict[str, Any]] = None,
         callback_url: Optional[str] = None
     ) -> SequenceExecution:
+        # 1. If previous_task_id is provided, resume from the point of failure
+        if previous_task_id:
+            prev_exec = db.query(SequenceExecution).filter(
+                (SequenceExecution.id == previous_task_id)
+            ).first()
+            if not prev_exec:
+                raise KeyError(f"Previous task ID '{previous_task_id}' not found.")
+            
+            if prev_exec.status not in ["FAILED", "PARTIAL_SUCCESS"]:
+                raise ValueError(f"Cannot resume task '{previous_task_id}' with status '{prev_exec.status}'. Only failed tasks can be resumed.")
+
+            prev_exec.status = "PENDING"
+            prev_exec.error_message = None
+            
+            current_steps = list(prev_exec.steps_data or [])
+            has_failed = False
+            first_failed_idx = 0
+            for idx, step in enumerate(current_steps):
+                if step.get("status") in ["FAILED", "RUNNING"]:
+                    step["status"] = "PENDING"
+                    step["error_message"] = None
+                    step["started_at"] = None
+                    step["finished_at"] = None
+                    step["duration_ms"] = 0
+                    step["retry_count"] = 0
+                    if not has_failed:
+                        first_failed_idx = idx
+                        has_failed = True
+            
+            prev_exec.steps_data = current_steps
+            prev_exec.current_step = first_failed_idx
+            db.commit()
+            db.refresh(prev_exec)
+            prev_exec._is_new = True
+            return prev_exec
+
+        # 2. Check Idempotency Key
         if idempotency_key:
             existing = db.query(SequenceExecution).filter(
                 SequenceExecution.idempotency_key == idempotency_key

@@ -259,7 +259,7 @@
             "header": [
               {
                 "key": "Authorization",
-                "value": "Bearer {{token}}"
+                "value": "Bearer {{admin_token}}"
               }
             ],
             "body": {
@@ -291,7 +291,7 @@
             "header": [
               {
                 "key": "Authorization",
-                "value": "Bearer {{token}}"
+                "value": "Bearer {{admin_token}}"
               }
             ],
             "url": {
@@ -314,7 +314,7 @@
             "header": [
               {
                 "key": "Authorization",
-                "value": "Bearer {{token}}"
+                "value": "Bearer {{admin_token}}"
               }
             ],
             "url": {

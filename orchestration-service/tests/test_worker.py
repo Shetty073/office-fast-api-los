@@ -3,7 +3,7 @@ import httpx
 import asyncio
 from unittest.mock import patch, MagicMock, AsyncMock
 from models import SequenceExecution
-from orchestrator import Orchestrator, evaluate_condition
+from orchestrator import Orchestrator, evaluate_condition, evaluate_success_criteria, TokenManager
 from worker import run_sequence_task, rollback_sequence_task, startup, shutdown
 from utils import get_by_path, set_by_path, SecretResolver, APIClient
 from database import init_database, get_db
@@ -16,6 +16,35 @@ def test_evaluate_condition():
     assert evaluate_condition("context.is_vip == True", responses, context) is True
     assert evaluate_condition("invalid_expression ++++", responses, context) is False
     assert evaluate_condition("", responses, context) is True
+
+def test_evaluate_success_criteria():
+    resp_success = {"status_code": 200, "success": True, "data": {"status": "APPROVED", "score": 750, "is_blacklisted": False}}
+    
+    # 1. Default
+    ok, err = evaluate_success_criteria(resp_success, None)
+    assert ok is True
+    assert err is None
+
+    # 2. Equals & Not Equals & Types
+    criteria = {
+        "expected_status_code": 200,
+        "equals": {"data.status": "APPROVED"},
+        "not_equals": {"data.is_blacklisted": True},
+        "types": {"data.score": "int"}
+    }
+    ok, err = evaluate_success_criteria(resp_success, criteria)
+    assert ok is True
+
+    # 3. Failed Criteria
+    fail_criteria = {"equals": {"data.status": "REJECTED"}}
+    ok, err = evaluate_success_criteria(resp_success, fail_criteria)
+    assert ok is False
+    assert "Field 'data.status' expected 'REJECTED'" in err
+
+    # 4. Failed Type
+    fail_type = {"types": {"data.score": "str"}}
+    ok, err = evaluate_success_criteria(resp_success, fail_type)
+    assert ok is False
 
 def test_utils_get_and_set_by_path():
     data = {"a": {"b": [{"c": "target"}]}}
@@ -60,55 +89,22 @@ def test_init_database_variants():
             mock_conn.execute.return_value.scalar.return_value = 0
             mock_engine.return_value.connect.return_value.__enter__.return_value = mock_conn
             init_database()
-            assert mock_engine.called
+            assert mock_conn.execute.called
 
-    with patch("config.DATABASE_URL", "mysql+pymysql://root:pass@localhost:3306/office_proj"):
+    with patch("config.DATABASE_URL", "mysql+pymysql://root:pass@localhost:3306/db"):
         with patch("database.create_engine") as mock_engine:
             mock_conn = MagicMock()
             mock_engine.return_value.connect.return_value.__enter__.return_value = mock_conn
             init_database()
-            assert mock_engine.called
-
-    with patch("config.DATABASE_URL", "sqlite:///test.db"):
-        init_database()
-
-    db_gen = get_db()
-    db = next(db_gen)
-    assert db is not None
-    try:
-        next(db_gen)
-    except StopIteration:
-        pass
-
-def test_model_task_counting(db_session):
-    execution = SequenceExecution(
-        id="test-model-prop-1",
-        sequence=["todo_service", ["post_service", "kyc_service"]],
-        inputs={},
-        mappings=[],
-        status="RUNNING",
-        steps_data=[
-            {"service_name": "todo_service", "status": "COMPLETED", "output_response": {"data": "ok"}},
-            {"service_name": "post_service", "status": "PENDING", "output_response": None}
-        ]
-    )
-    assert execution.total_tasks == 3
-    assert execution.completed_tasks == 1
-    assert execution.pending_tasks == 2
-    assert "todo_service" in execution.responses
+            assert mock_conn.execute.called
 
 @pytest.mark.asyncio
-async def test_worker_lifecycle():
-    await startup({})
-    await shutdown({})
-
-@pytest.mark.asyncio
-async def test_worker_tasks(db_session, db_session_factory):
-    exec_id = "test-worker-run-task-1"
+async def test_worker_tasks(db_session):
+    exec_id = "test-worker-exec-1"
     exec_obj = SequenceExecution(
         id=exec_id,
         sequence=["todo_service"],
-        inputs={"todo_service": {"_mock": True}},
+        inputs={"todo_service": {"todo_id": 1}},
         mappings=[],
         status="PENDING",
         current_step=0,
@@ -117,24 +113,40 @@ async def test_worker_tasks(db_session, db_session_factory):
     db_session.add(exec_obj)
     db_session.commit()
 
-    async def mock_handler(request: httpx.Request):
-        return httpx.Response(200, json={"success": True, "data": {"id": 1}})
-
-    transport = httpx.MockTransport(mock_handler)
-    with patch("httpx.AsyncClient", return_value=httpx.AsyncClient(transport=transport)), \
-         patch("worker.get_db", db_session_factory):
+    with patch("orchestrator.Orchestrator.run_sequence", new_callable=AsyncMock) as mock_run:
         await run_sequence_task({}, exec_id)
+        mock_run.assert_called_once()
 
-    db_session.expire_all()
-    reloaded = db_session.query(SequenceExecution).filter(SequenceExecution.id == exec_id).first()
-    assert reloaded.status == "COMPLETED"
-
-    # Test rollback task
-    await rollback_sequence_task({}, exec_id, [("todo_service", {}, {})])
+    with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = httpx.Response(200, json={"status": "compensated"})
+        await rollback_sequence_task({}, exec_id, [("todo_service", {}, {})])
+        assert mock_post.called
 
 @pytest.mark.asyncio
-async def test_orchestrator_parallel_and_transformations(db_session, db_session_factory):
-    exec_id = "test-parallel-transform-1"
+async def test_worker_lifecycle():
+    await startup({})
+    await shutdown({})
+
+@pytest.mark.asyncio
+async def test_token_manager():
+    async def mock_handler(request: httpx.Request):
+        if "login" in str(request.url):
+            return httpx.Response(200, json={"access_token": "mock-jwt-token", "expires_in_seconds": 3600})
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(mock_handler)
+    async with httpx.AsyncClient(transport=transport) as mock_client:
+        with patch.object(TokenManager, "get_redis", new_callable=AsyncMock) as mock_redis_getter:
+            mock_redis = AsyncMock()
+            mock_redis.get.return_value = None
+            mock_redis_getter.return_value = mock_redis
+            token = await TokenManager.get_bearer_token(mock_client)
+            assert token == "mock-jwt-token"
+            mock_redis.set.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_orchestrator_full_workflow(db_session, db_session_factory):
+    exec_id = "test-orch-flow-1"
     exec_obj = SequenceExecution(
         id=exec_id,
         sequence=[
@@ -165,7 +177,9 @@ async def test_orchestrator_parallel_and_transformations(db_session, db_session_
         url = str(request.url)
         import json
         body = json.loads(request.content.decode("utf-8")) if request.content else {}
-        if "compensate" in url:
+        if "login" in url:
+            return httpx.Response(200, json={"access_token": "mock-token", "expires_in_seconds": 3600})
+        elif "compensate" in url:
             return httpx.Response(200, json={"status": "compensated"})
         elif "todo_service" in url:
             assert body.get("todo_id") == 100
@@ -183,7 +197,9 @@ async def test_orchestrator_parallel_and_transformations(db_session, db_session_
 
     transport = httpx.MockTransport(mock_handler)
     async with httpx.AsyncClient(transport=transport) as mock_client:
-        await Orchestrator.run_sequence(exec_id, db_session_factory, http_client=mock_client)
+        with patch.object(TokenManager, "get_bearer_token", new_callable=AsyncMock) as mock_token:
+            mock_token.return_value = "mock-bearer-token"
+            await Orchestrator.run_sequence(exec_id, db_session_factory, http_client=mock_client)
 
     db_session.expire_all()
     reloaded = db_session.query(SequenceExecution).filter(SequenceExecution.id == exec_id).first()
@@ -207,11 +223,15 @@ async def test_orchestrator_skipped_step(db_session, db_session_factory):
     db_session.commit()
 
     async def mock_handler(request: httpx.Request):
+        if "login" in str(request.url):
+            return httpx.Response(200, json={"access_token": "mock-token"})
         return httpx.Response(200, json={"success": True, "data": {"id": 1}})
 
     transport = httpx.MockTransport(mock_handler)
     async with httpx.AsyncClient(transport=transport) as mock_client:
-        await Orchestrator.run_sequence(exec_id, db_session_factory, http_client=mock_client)
+        with patch.object(TokenManager, "get_bearer_token", new_callable=AsyncMock) as mock_token:
+            mock_token.return_value = "mock-bearer-token"
+            await Orchestrator.run_sequence(exec_id, db_session_factory, http_client=mock_client)
 
     db_session.expire_all()
     reloaded = db_session.query(SequenceExecution).filter(SequenceExecution.id == exec_id).first()

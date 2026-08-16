@@ -1,6 +1,6 @@
 {
   "name": "05_resilient_retries_and_success_conditions",
-  "description": "Demonstrates assert conditions (checking response keys/status) and Saga rollback on failure",
+  "description": "Demonstrates field equality, inequality, data type assertions, and HTTP status code validation in task success rules",
   "sequence": [
     "todo_service",
     "post_service"
@@ -21,14 +21,23 @@
       "from_service": "todo_service",
       "from_field": "data.title",
       "to_service": "post_service",
-      "to_field": "body"
+      "to_field": "body",
+      "transform": "upper"
     }
   ],
   "success_conditions": {
     "todo_service": {
-      "status_codes": [200],
-      "body_rules": {
-        "success": true
+      "expected_status_code": 200,
+      "equals": {
+        "success": true,
+        "data.completed": true
+      },
+      "not_equals": {
+        "data.is_blacklisted": true
+      },
+      "types": {
+        "data.id": "int",
+        "data.title": "str"
       }
     }
   }

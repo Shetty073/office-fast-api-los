@@ -147,9 +147,8 @@ def test_trigger_by_sequence_name(client, db_session):
         res = client.post("/api/chain/trigger/flow_test", json=trigger_payload)
         assert res.status_code == 200
         data = res.json()
-        assert data["sequence_name"] == "flow_test"
-        assert data["status"] == "PENDING"
-        assert data["inputs"]["todo_service"]["todo_id"] == 42
+        assert data["task_name"] == "flow_test"
+        assert "task_id" in data
         assert mock_redis.enqueue_job.called
 
 def test_trigger_by_sequence_invalid_name(client):

@@ -3,13 +3,76 @@ import asyncio
 import logging
 import httpx
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, Union, Tuple
+import redis.asyncio as aioredis
 from sqlalchemy.orm import Session
 from models import SequenceExecution
 from utils import get_by_path, set_by_path
 import config
+from logger import setup_worker_logger
 
-logger = logging.getLogger(__name__)
+logger = setup_worker_logger()
+
+class TokenManager:
+    """
+    Manages JWT Authentication for Orchestrator calls to FastAPI.
+    Caches token in Redis with TTL matching token expiry minus safety margin.
+    Auto-refreshes token upon expiration.
+    """
+    _redis_client: Optional[aioredis.Redis] = None
+
+    @classmethod
+    async def get_redis(cls) -> aioredis.Redis:
+        if cls._redis_client is None:
+            cls._redis_client = aioredis.Redis(
+                host=config.REDIS_HOST,
+                port=config.REDIS_PORT,
+                password=config.REDIS_PASSWORD,
+                db=config.REDIS_DATABASE,
+                decode_responses=True
+            )
+        return cls._redis_client
+
+    @classmethod
+    async def get_bearer_token(cls, http_client: httpx.AsyncClient) -> str:
+        try:
+            r = await cls.get_redis()
+            cached_token = await r.get(config.AUTH_TOKEN_CACHE_KEY)
+            if cached_token:
+                return cached_token
+        except Exception as e:
+            logger.warning(f"Redis token cache lookup failed: {e}")
+
+        # Fetch fresh token from FastAPI auth endpoint
+        login_url = f"{config.FASTAPI_BASE_URL.rstrip('/')}/api/auth/login"
+        payload = {
+            "username": config.ORCHESTRATOR_AUTH_USERNAME,
+            "password": config.ORCHESTRATOR_AUTH_PASSWORD
+        }
+
+        try:
+            res = await http_client.post(login_url, json=payload, timeout=10.0)
+            if res.status_code == 200:
+                data = res.json()
+                token = data.get("access_token")
+                expires_in = data.get("expires_in_seconds", 3600)
+                
+                # Cache token in Redis with safety margin (subtract 60s)
+                cache_ttl = max(30, expires_in - 60)
+                try:
+                    r = await cls.get_redis()
+                    await r.set(config.AUTH_TOKEN_CACHE_KEY, token, ex=cache_ttl)
+                    logger.info(f"Generated and cached new Orchestrator JWT token in Redis (TTL: {cache_ttl}s)")
+                except Exception as e:
+                    logger.warning(f"Could not cache token in Redis: {e}")
+                    
+                return token
+            else:
+                logger.error(f"Failed to authenticate orchestrator against FastAPI at {login_url}: HTTP {res.status_code} {res.text}")
+                return ""
+        except Exception as e:
+            logger.error(f"Exception during orchestrator authentication: {e}")
+            return ""
 
 def evaluate_condition(expression: str, responses: Dict[str, Any], context: Dict[str, Any]) -> bool:
     """
@@ -46,11 +109,75 @@ def evaluate_condition(expression: str, responses: Dict[str, Any], context: Dict
         logger.error(f"Error evaluating condition '{expression}': {e}")
         return False
 
+def evaluate_success_criteria(
+    service_response: Dict[str, Any], 
+    criteria: Optional[Dict[str, Any]]
+) -> Tuple[bool, Optional[str]]:
+    """
+    Evaluates customizable success conditions for a service response.
+    Supports:
+    - expected_status_code (int or list of ints)
+    - equals: { "data.status": "APPROVED", ... }
+    - not_equals: { "data.is_blacklisted": True, ... }
+    - types: { "data.score": "int", "data.user_id": "str", ... }
+    """
+    if not criteria:
+        # Default success check
+        if service_response.get("success", True) and service_response.get("status_code", 200) < 400:
+            return True, None
+        return False, service_response.get("error") or "Service reported failure."
+
+    # 1. Status Code Check
+    expected_status = criteria.get("expected_status_code") or criteria.get("status_code")
+    actual_status = service_response.get("status_code", 200)
+    if expected_status is not None:
+        if isinstance(expected_status, list):
+            if actual_status not in expected_status:
+                return False, f"Expected status code in {expected_status}, got {actual_status}"
+        elif actual_status != expected_status:
+            return False, f"Expected status code {expected_status}, got {actual_status}"
+
+    # 2. Equality Checks: {"data.status": "COMPLETED"}
+    equals_rules = criteria.get("equals") or {}
+    for field_path, expected_val in equals_rules.items():
+        actual_val = get_by_path(service_response, field_path)
+        if actual_val != expected_val:
+            return False, f"Field '{field_path}' expected '{expected_val}', got '{actual_val}'"
+
+    # 3. Inequality Checks: {"data.error_flag": True}
+    not_equals_rules = criteria.get("not_equals") or {}
+    for field_path, unexpected_val in not_equals_rules.items():
+        actual_val = get_by_path(service_response, field_path)
+        if actual_val == unexpected_val:
+            return False, f"Field '{field_path}' must not equal '{unexpected_val}'"
+
+    # 4. Data Type Checks: {"data.id": "int", "data.title": "str"}
+    type_rules = criteria.get("types") or {}
+    type_map = {
+        "int": int,
+        "str": str,
+        "string": str,
+        "float": float,
+        "bool": bool,
+        "boolean": bool,
+        "dict": dict,
+        "list": list
+    }
+    for field_path, expected_type_str in type_rules.items():
+        actual_val = get_by_path(service_response, field_path)
+        target_type = type_map.get(expected_type_str.lower())
+        if target_type and not isinstance(actual_val, target_type):
+            return False, f"Field '{field_path}' expected type {expected_type_str}, got {type(actual_val).__name__}"
+
+    return True, None
+
+from typing import Tuple
+
 class Orchestrator:
     """
     Generic, dynamic HTTP-based Orchestrator.
-    Dispatches steps to FastAPI standalone endpoints, evaluates data mappings,
-    handles exponential retries, and executes Saga rollbacks.
+    Dispatches steps to FastAPI standalone endpoints, resolves cascading data mappings,
+    handles exponential retries, logs state transitions, and executes Saga rollbacks.
     """
     active_tasks: Dict[str, asyncio.Task] = {}
 
@@ -65,10 +192,12 @@ class Orchestrator:
             http_client = httpx.AsyncClient(timeout=30.0)
             should_close_client = True
 
+        logger.info(f"[TASK_RECEIVED] Execution {execution_id} received by ARQ Orchestrator.")
+
         try:
             execution = db.query(SequenceExecution).filter(SequenceExecution.id == execution_id).first()
             if not execution:
-                logger.error(f"Execution {execution_id} not found.")
+                logger.error(f"[TASK_ERROR] Execution {execution_id} not found in database.")
                 return
 
             execution.status = "RUNNING"
@@ -102,46 +231,34 @@ class Orchestrator:
                     })
                 execution.steps_data = steps_data
                 db.commit()
+            else:
+                # If resuming an existing execution, populate prior successful responses
+                for step in execution.steps_data:
+                    if step.get("status") == "COMPLETED" and step.get("output_response"):
+                        s_name = step["service_name"]
+                        responses[s_name] = step["output_response"]
+                        completed_steps.append((s_name, step.get("input_payload", {}), step["output_response"]))
 
-            # Helper for executing a single step over HTTP to FastAPI
+            # Step Execution Worker
             async def run_single_step(service_name: str, step_idx: int):
-                # Resume strategy check
-                if step_idx < len(execution.steps_data) and execution.steps_data[step_idx]["status"] == "COMPLETED":
-                    logger.info(f"Resume: Skipping already completed step '{service_name}'")
-                    cached_response = execution.steps_data[step_idx]["output_response"]
-                    responses[service_name] = cached_response
-                    cached_payload = execution.steps_data[step_idx]["input_payload"]
-                    completed_steps.append((service_name, cached_payload, cached_response))
-                    return True, service_name, cached_payload, cached_response, None, True
+                step_info = execution.steps_data[step_idx]
+                if step_info.get("status") == "COMPLETED":
+                    logger.info(f"[TASK_STEP_SKIPPED] Step {step_idx + 1} ({service_name}) already completed previously. Skipping.")
+                    return True, service_name, step_info.get("input_payload", {}), step_info.get("output_response", {}), None, True
 
-                # Evaluate execution condition
-                condition = None
-                if execution.conditions and isinstance(execution.conditions, dict):
-                    condition = execution.conditions.get(service_name)
-                
-                should_run = True
-                if condition:
-                    should_run = evaluate_condition(condition, responses, execution.context or {})
-                
-                if not should_run:
-                    step_info = {
-                        "service_name": service_name,
-                        "status": "SKIPPED",
-                        "input_payload": {},
-                        "output_response": None,
-                        "error_message": "Condition not met",
-                        "started_at": datetime.utcnow().isoformat(),
-                        "finished_at": datetime.utcnow().isoformat(),
-                        "duration_ms": 0,
-                        "retry_count": 0
-                    }
-                    current_steps = list(execution.steps_data)
-                    current_steps[step_idx] = step_info
+                # Evaluate conditional skip expressions
+                conditions_dict = execution.conditions or {}
+                condition_expr = conditions_dict.get(service_name)
+                if condition_expr and not evaluate_condition(condition_expr, responses, execution.context or {}):
+                    logger.info(f"[TASK_STEP_SKIPPED] Condition '{condition_expr}' evaluated to False for service '{service_name}'.")
+                    updated_step = dict(execution.steps_data[step_idx])
+                    updated_step["status"] = "SKIPPED"
+                    updated_step["error_message"] = "Condition evaluated to False"
+                    current_steps = [dict(s) for s in execution.steps_data]
+                    current_steps[step_idx] = updated_step
                     execution.steps_data = current_steps
                     db.commit()
-                    
-                    responses[service_name] = {"success": True, "data": None, "status_code": 200, "skipped": True}
-                    return True, service_name, {}, responses[service_name], None, True
+                    return True, service_name, {}, None, None, False
 
                 step_info = {
                     "service_name": service_name,
@@ -159,11 +276,17 @@ class Orchestrator:
                 execution.steps_data = current_steps
                 db.commit()
 
-                # Start with static inputs for this service
+                # Start with base inputs for this service
                 payload = execution.inputs.get(service_name, {}).copy()
 
-                # Dynamic parameter mapping from trigger_payload, context, or previous step outputs
-                for mapping in execution.mappings:
+                # ------------------------------------------------------------------
+                # Dynamic Parameter Mapping across Trigger Payload & Prior Services
+                # Supports:
+                # 1. from_service == "trigger_payload" -> from execution.trigger_payload
+                # 2. from_service in responses -> from responses[from_service] (or responses[from_service].data)
+                # 3. from_service == "context" -> from execution.context
+                # ------------------------------------------------------------------
+                for mapping in (execution.mappings or []):
                     if mapping.get("to_service") == service_name:
                         from_service = mapping.get("from_service")
                         from_field = mapping.get("from_field")
@@ -177,9 +300,10 @@ class Orchestrator:
                             val = get_by_path(source_data, from_field)
                         elif from_service in responses:
                             prev_response = responses[from_service]
-                            if prev_response.get("success") and prev_response.get("data") is not None:
-                                source_data = prev_response["data"]
-                                val = get_by_path(source_data, from_field)
+                            # Check top-level response or nested 'data' dictionary
+                            val = get_by_path(prev_response, from_field)
+                            if val is None and isinstance(prev_response, dict) and "data" in prev_response:
+                                val = get_by_path(prev_response["data"], from_field)
                                 
                         if val is not None:
                             transform_type = mapping.get("transform")
@@ -204,7 +328,7 @@ class Orchestrator:
                 execution.steps_data = current_steps
                 db.commit()
 
-                # Execute HTTP call to FastAPI with retries & backoff
+                # Execute HTTP call to FastAPI with Bearer Token & Exponential Retries
                 retries = 0
                 max_retries = 3
                 step_success = False
@@ -214,10 +338,7 @@ class Orchestrator:
                 start_step_time = time.time()
                 endpoint_url = f"{config.FASTAPI_BASE_URL.rstrip('/')}/api/standalone/{service_name}"
 
-                headers = {
-                    "X-Execution-Source": "orchestrator",
-                    "X-Execution-Id": execution_id
-                }
+                custom_criteria = (execution.success_conditions or {}).get(service_name)
 
                 while retries <= max_retries:
                     step_info["retry_count"] = retries
@@ -226,19 +347,36 @@ class Orchestrator:
                     execution.steps_data = current_steps
                     db.commit()
 
+                    # Retrieve cached or refreshed JWT Bearer Token
+                    token = await TokenManager.get_bearer_token(http_client)
+                    headers = {
+                        "X-Execution-Source": "orchestrator",
+                        "X-Execution-Id": execution_id
+                    }
+                    if token:
+                        headers["Authorization"] = f"Bearer {token}"
+
+                    if retries > 0:
+                        logger.warning(f"[TASK_RETRY] Retry attempt {retries}/{max_retries} for step '{service_name}' (Execution: {execution_id})")
+
                     try:
                         resp = await http_client.post(endpoint_url, json=payload, headers=headers)
                         try:
                             resp_data = resp.json()
                         except Exception:
-                            resp_data = {"text": resp.text}
+                            resp_data = {"text": resp.text, "status_code": resp.status_code}
 
-                        if 200 <= resp.status_code < 300 and resp_data.get("success", True):
+                        if isinstance(resp_data, dict) and "status_code" not in resp_data:
+                            resp_data["status_code"] = resp.status_code
+
+                        # Evaluate success based on HTTP status and customizable criteria
+                        is_ok, err_msg = evaluate_success_criteria(resp_data, custom_criteria)
+                        if is_ok and 200 <= resp.status_code < 300:
                             step_success = True
                             service_response = resp_data
                             break
                         else:
-                            step_error = resp_data.get("detail") or resp_data.get("error") or f"HTTP {resp.status_code}"
+                            step_error = err_msg or resp_data.get("detail") or resp_data.get("error") or f"HTTP {resp.status_code}"
                             service_response = resp_data
                     except Exception as e:
                         step_error = str(e)
@@ -254,6 +392,7 @@ class Orchestrator:
                 step_info["duration_ms"] = int((time.time() - start_step_time) * 1000)
 
                 if step_success:
+                    logger.info(f"[TASK_STEP_SUCCESS] Step {step_idx + 1} ({service_name}) completed successfully in {step_info['duration_ms']}ms.")
                     step_info["status"] = "COMPLETED"
                     step_info["output_response"] = service_response
                     responses[service_name] = service_response
@@ -267,6 +406,7 @@ class Orchestrator:
                             execution.context = current_context
                             db.commit()
                 else:
+                    logger.error(f"[TASK_STEP_FAILED] Step {step_idx + 1} ({service_name}) failed after {retries - 1} retries. Error: {step_error}")
                     step_info["status"] = "FAILED"
                     step_info["error_message"] = step_error
                     step_info["output_response"] = service_response
@@ -285,6 +425,11 @@ class Orchestrator:
 
             # Saga Rollback compensation helper
             async def rollback_sequence(completed_steps_list):
+                token = await TokenManager.get_bearer_token(http_client)
+                headers = {"X-Execution-Id": execution_id}
+                if token:
+                    headers["Authorization"] = f"Bearer {token}"
+
                 for name, payload_data, response_data in reversed(completed_steps_list):
                     compensate_url = f"{config.FASTAPI_BASE_URL.rstrip('/')}/api/standalone/{name}/compensate"
                     try:
@@ -292,7 +437,7 @@ class Orchestrator:
                         await http_client.post(
                             compensate_url,
                             json={"input_payload": payload_data, "output_response": response_data},
-                            headers={"X-Execution-Id": execution_id}
+                            headers=headers
                         )
                     except Exception as e:
                         logger.error(f"SAGA: Compensation failed for service '{name}': {e}")
@@ -322,6 +467,7 @@ class Orchestrator:
                                 execution.error_message = f"Failed at critical step {service_name}: {step_err}"
                                 execution.steps_data = [s for s in execution.steps_data if s["status"] != "PENDING"]
                                 db.commit()
+                                logger.error(f"[TASK_FAILED] Sequence {execution_id} marked as FAILED at step '{service_name}'. Initiating rollback.")
                                 await rollback_sequence(completed_steps)
                                 return
                             else:
@@ -339,6 +485,7 @@ class Orchestrator:
                             execution.error_message = f"Failed at critical step {service_name}: {step_err}"
                             execution.steps_data = [s for s in execution.steps_data if s["status"] != "PENDING"]
                             db.commit()
+                            logger.error(f"[TASK_FAILED] Sequence {execution_id} marked as FAILED at step '{service_name}'. Initiating rollback.")
                             await rollback_sequence(completed_steps)
                             return
                         else:
@@ -346,11 +493,13 @@ class Orchestrator:
                     else:
                         completed_steps.append((service_name, payload_data, service_resp))
 
-            execution.status = "PARTIAL_SUCCESS" if has_partial_failure else "COMPLETED"
+            final_status = "PARTIAL_SUCCESS" if has_partial_failure else "COMPLETED"
+            execution.status = final_status
             db.commit()
+            logger.info(f"[TASK_SUCCESS] Execution {execution_id} finished with status '{final_status}'.")
 
         except asyncio.CancelledError:
-            logger.info(f"Execution {execution_id} cancelled.")
+            logger.info(f"[TASK_CANCELLED] Execution {execution_id} cancelled.")
             try:
                 execution = db.query(SequenceExecution).filter(SequenceExecution.id == execution_id).first()
                 if execution:
@@ -363,7 +512,7 @@ class Orchestrator:
             await rollback_sequence(completed_steps)
             raise
         except Exception as e:
-            logger.exception(f"Orchestrator internal failure: {e}")
+            logger.exception(f"[TASK_ERROR] Orchestrator internal failure for execution {execution_id}: {e}")
             try:
                 execution = db.query(SequenceExecution).filter(SequenceExecution.id == execution_id).first()
                 if execution:

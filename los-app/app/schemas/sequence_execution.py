@@ -7,8 +7,13 @@ class TriggerSequencePayloadSchema(BaseModel):
     payload: Dict[str, Any] = Field(default_factory=dict, description="Initial parameters passed to the sequence (accessible as 'trigger_payload')")
     inputs_override: Optional[Dict[str, Dict[str, Any]]] = Field(default_factory=dict, description="Optional override for static service inputs")
     idempotency_key: Optional[str] = Field(default=None, description="Unique key to prevent duplicate runs")
+    previous_task_id: Optional[str] = Field(default=None, description="Pass previous failed task ID to resume from point of failure")
     context: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Optional initial shared context dictionary")
     callback_url: Optional[str] = Field(default=None, description="Optional callback URL for webhook notification")
+
+class TriggerResponseSchema(BaseModel):
+    task_id: str = Field(..., description="Unique execution ID of the triggered task sequence")
+    task_name: str = Field(..., description="Name of the sequence recipe or dynamic task")
 
 class SequenceTriggerSchema(BaseModel):
     sequence: List[Union[str, List[str]]] = Field(..., description="Ordered list of service names to run. Nested lists run in parallel.")

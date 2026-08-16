@@ -6,6 +6,7 @@ from app.models.sequence_execution import SequenceExecution
 from app.services.sequence_manager import SequenceManager
 from app.schemas.sequence_execution import (
     TriggerSequencePayloadSchema,
+    TriggerResponseSchema,
     SequenceTriggerSchema,
     SequenceExecutionResponseSchema,
     SequenceRetrySchema
@@ -16,7 +17,7 @@ import logging
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-@router.post("/trigger/{sequence_name_or_id}", response_model=SequenceExecutionResponseSchema)
+@router.post("/trigger/{sequence_name_or_id}", response_model=TriggerResponseSchema)
 async def trigger_by_sequence_name(
     sequence_name_or_id: str,
     payload: TriggerSequencePayloadSchema,
@@ -24,7 +25,8 @@ async def trigger_by_sequence_name(
 ):
     """
     Trigger a named sequence recipe.
-    Fetches the configuration from DB, initializes the execution record, and enqueues to ARQ.
+    Returns only task_id and task_name.
+    If 'previous_task_id' is provided, resumes from the point of failure.
     """
     try:
         execution = SequenceManager.trigger_by_definition(
@@ -33,6 +35,7 @@ async def trigger_by_sequence_name(
             trigger_payload=payload.payload,
             inputs_override=payload.inputs_override,
             idempotency_key=payload.idempotency_key,
+            previous_task_id=payload.previous_task_id,
             context=payload.context,
             callback_url=payload.callback_url
         )
@@ -44,12 +47,16 @@ async def trigger_by_sequence_name(
     if getattr(execution, "_is_new", True):
         try:
             arq_redis = await get_arq_redis()
-            await arq_redis.enqueue_job("run_sequence_task", execution.id, _job_id=execution.id)
-            logger.info(f"Enqueued named sequence task {execution.id} ({sequence_name_or_id}) into ARQ")
+            job_id = f"{execution.id}-run"
+            await arq_redis.enqueue_job("run_sequence_task", execution.id, _job_id=job_id)
+            logger.info(f"Enqueued sequence task {execution.id} ({sequence_name_or_id}) into ARQ")
         except Exception as e:
             logger.error(f"Failed to enqueue task {execution.id} to ARQ: {e}")
 
-    return execution
+    return {
+        "task_id": execution.id,
+        "task_name": execution.sequence_name or sequence_name_or_id
+    }
 
 @router.post("/trigger", response_model=SequenceExecutionResponseSchema)
 async def trigger_chain_adhoc(

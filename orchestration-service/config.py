@@ -15,3 +15,8 @@ REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
 REDIS_DATABASE = int(os.getenv("REDIS_DATABASE", "0"))
 
 FASTAPI_BASE_URL = os.getenv("FASTAPI_BASE_URL", "http://localhost:8000")
+
+# Service Authentication Credentials for Orchestrator -> FastAPI dispatch
+ORCHESTRATOR_AUTH_USERNAME = os.getenv("ORCHESTRATOR_AUTH_USERNAME", "admin")
+ORCHESTRATOR_AUTH_PASSWORD = os.getenv("ORCHESTRATOR_AUTH_PASSWORD", "admin12345")
+AUTH_TOKEN_CACHE_KEY = "los:orchestrator:jwt_token"

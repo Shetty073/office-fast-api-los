@@ -17,6 +17,7 @@ The **SCF LOS Orchestration Engine** is a high-performance, asynchronous workflo
 3. **Standalone Generic ARQ Orchestrator (`orchestration-service/`)**:
    - Executes jobs pulled from Redis asynchronously.
    - Dispatches generic HTTP requests to `POST {FASTAPI_BASE_URL}/api/standalone/{service_name}` with source headers.
+   - Automatically caches API tokens for downstream services to avoid repeated auth handshakes.
    - Evaluates dynamic parameter mappings, retry loops with exponential backoff & jitter, and Saga compensations.
 4. **Enhanced Status API**:
    - Returns execution status along with `total_tasks`, `completed_tasks`, `pending_tasks`, and a consolidated `responses` dictionary with outputs from each step.
