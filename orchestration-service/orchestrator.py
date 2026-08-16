@@ -51,6 +51,7 @@ class TokenManager:
         }
 
         try:
+            logger.info(f"TokenManager: Requesting fresh JWT auth token from {login_url} for user '{config.ORCHESTRATOR_AUTH_USERNAME}'")
             res = await http_client.post(login_url, json=payload, timeout=10.0)
             if res.status_code == 200:
                 data = res.json()
@@ -68,10 +69,10 @@ class TokenManager:
                     
                 return token
             else:
-                logger.error(f"Failed to authenticate orchestrator against FastAPI at {login_url}: HTTP {res.status_code} {res.text}")
+                logger.error(f"Failed to authenticate orchestrator against FastAPI at {login_url}: HTTP {res.status_code} - {res.text}")
                 return ""
         except Exception as e:
-            logger.error(f"Exception during orchestrator authentication: {e}")
+            logger.error(f"Exception during orchestrator authentication against {login_url}: {e}")
             return ""
 
 def evaluate_condition(expression: str, responses: Dict[str, Any], context: Dict[str, Any]) -> bool:

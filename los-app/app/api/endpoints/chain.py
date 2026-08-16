@@ -95,12 +95,15 @@ async def trigger_chain_adhoc(
 @router.get("/status/{execution_id}", response_model=SequenceStatusResponseSchema)
 async def get_chain_status(execution_id: str, db: Session = Depends(get_db)):
     """
-    Retrieve sequence execution status, task counts, task_id, and response data dictionary.
+    Retrieve live sequence execution status, task counts, task_id, and response data dictionary.
+    Guarantees freshest un-cached state from the database.
     """
+    db.expire_all()
     execution = db.query(SequenceExecution).filter(SequenceExecution.id == execution_id).first()
     if not execution:
         raise HTTPException(status_code=404, detail=f"Sequence execution '{execution_id}' not found.")
     
+    db.refresh(execution)
     return SequenceStatusResponseSchema(
         task_id=execution.id,
         status=execution.status,

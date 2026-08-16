@@ -285,7 +285,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n    \"name\": \"user_onboarding_flow\",\n    \"description\": \"Onboarding pipeline: fetches todo item and maps its title to post body\",\n    \"sequence\": [\n        \"todo_service\",\n        \"post_service\"\n    ],\n    \"default_inputs\": {\n        \"todo_service\": {\n            \"_mock\": true\n        },\n        \"post_service\": {\n            \"title\": \"Automated Onboarding Post\",\n            \"_mock\": true\n        }\n    },\n    \"mappings\": [\n        {\n            \"from_service\": \"trigger_payload\",\n            \"from_field\": \"customer_id\",\n            \"to_service\": \"todo_service\",\n            \"to_field\": \"todo_id\"\n        },\n        {\n            \"from_service\": \"todo_service\",\n            \"from_field\": \"data.title\",\n            \"to_service\": \"post_service\",\n            \"to_field\": \"body\",\n            \"transform\": \"upper\"\n        }\n    ]\n}",
+              "raw": "{\n    \"name\": \"post_lifecycle_pipeline\",\n    \"description\": \"Lifecycle pipeline: 1. Create post -> 2. Get post by id -> 3. Update post (PUT) -> 4. Get updated post\",\n    \"sequence\": [\n        \"create_post_service\",\n        \"get_post_service\",\n        \"update_post_service\",\n        \"get_post_service\"\n    ],\n    \"default_inputs\": {\n        \"create_post_service\": {\n            \"userId\": 1\n        },\n        \"get_post_service\": {},\n        \"update_post_service\": {\n            \"userId\": 1\n        }\n    },\n    \"mappings\": [\n        {\n            \"from_service\": \"trigger_payload\",\n            \"from_field\": \"post_title\",\n            \"to_service\": \"create_post_service\",\n            \"to_field\": \"title\"\n        },\n        {\n            \"from_service\": \"trigger_payload\",\n            \"from_field\": \"post_body\",\n            \"to_service\": \"create_post_service\",\n            \"to_field\": \"body\"\n        },\n        {\n            \"from_service\": \"create_post_service\",\n            \"from_field\": \"data.id\",\n            \"to_service\": \"get_post_service\",\n            \"to_field\": \"post_id\"\n        },\n        {\n            \"from_service\": \"create_post_service\",\n            \"from_field\": \"data.id\",\n            \"to_service\": \"update_post_service\",\n            \"to_field\": \"id\"\n        },\n        {\n            \"from_service\": \"trigger_payload\",\n            \"from_field\": \"update_title\",\n            \"to_service\": \"update_post_service\",\n            \"to_field\": \"title\"\n        },\n        {\n            \"from_service\": \"trigger_payload\",\n            \"from_field\": \"update_body\",\n            \"to_service\": \"update_post_service\",\n            \"to_field\": \"body\"\n        }\n    ],\n    \"success_conditions\": {\n        \"create_post_service\": {\n            \"expected_status_code\": [200, 201],\n            \"equals\": {\n                \"success\": true\n            }\n        },\n        \"get_post_service\": {\n            \"expected_status_code\": 200,\n            \"equals\": {\n                \"success\": true\n            }\n        },\n        \"update_post_service\": {\n            \"expected_status_code\": 200,\n            \"equals\": {\n                \"success\": true\n            }\n        }\n    },\n    \"skip_conditions\": [\n        {\n            \"service\": \"update_post_service\",\n            \"condition\": \"context.skip_update == True\",\n            \"reason\": \"Update skipped as per context flag\"\n        }\n    ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -339,14 +339,14 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/api/sequences/user_onboarding_flow",
+              "raw": "{{base_url}}/api/sequences/post_lifecycle_pipeline",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "api",
                 "sequences",
-                "user_onboarding_flow"
+                "post_lifecycle_pipeline"
               ]
             }
           },
@@ -369,7 +369,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n    \"payload\": {\n        \"customer_id\": 7\n    },\n    \"idempotency_key\": \"idemp-postman-001\"\n}",
+              "raw": "{\n    \"payload\": {\n        \"post_title\": \"Real REST Orchestrated Post\",\n        \"post_body\": \"Post created via JSONPlaceholder integration\",\n        \"update_title\": \"Updated REST Post Title\",\n        \"update_body\": \"Post body updated via PUT step\"\n    }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -377,7 +377,7 @@
               }
             },
             "url": {
-              "raw": "{{base_url}}/api/chain/trigger/user_onboarding_flow",
+              "raw": "{{base_url}}/api/chain/trigger/post_lifecycle_pipeline",
               "host": [
                 "{{base_url}}"
               ],
@@ -385,7 +385,7 @@
                 "api",
                 "chain",
                 "trigger",
-                "user_onboarding_flow"
+                "post_lifecycle_pipeline"
               ]
             }
           },
@@ -403,7 +403,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n    \"sequence\": [\n        \"todo_service\",\n        [\n            \"post_service\"\n        ]\n    ],\n    \"inputs\": {\n        \"todo_service\": {\n            \"todo_id\": 2,\n            \"_mock\": true\n        },\n        \"post_service\": {\n            \"title\": \"Parallel Step Post\",\n            \"body\": \"Dynamic Body\",\n            \"_mock\": true\n        }\n    },\n    \"mappings\": [\n        {\n            \"from_service\": \"todo_service\",\n            \"from_field\": \"data.title\",\n            \"to_service\": \"post_service\",\n            \"to_field\": \"body\"\n        }\n    ],\n    \"idempotency_key\": \"idemp-adhoc-001\"\n}",
+              "raw": "{\n    \"sequence\": [\n        \"create_post_service\",\n        [\n            \"get_post_service\"\n        ]\n    ],\n    \"inputs\": {\n        \"create_post_service\": {\n            \"title\": \"Adhoc Post\",\n            \"body\": \"Adhoc Body\",\n            \"userId\": 1\n        },\n        \"get_post_service\": {\n            \"post_id\": 1\n        }\n    },\n    \"mappings\": [\n        {\n            \"from_service\": \"create_post_service\",\n            \"from_field\": \"data.id\",\n            \"to_service\": \"get_post_service\",\n            \"to_field\": \"post_id\"\n        }\n    ],\n    \"idempotency_key\": \"idemp-adhoc-posts-001\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
