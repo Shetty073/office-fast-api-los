@@ -403,6 +403,22 @@ class Orchestrator:
                         if isinstance(resp_data, dict) and "status_code" not in resp_data:
                             resp_data["status_code"] = resp.status_code
 
+                        # Check for HTTP 429 Rate Limiting
+                        if resp.status_code == 429:
+                            rate_limit_delay = config.RATE_LIMIT_RETRY_DELAY_SECONDS
+                            logger.warning(
+                                f"[RATE_LIMITED_429] Service '{service_name}' returned 429 Too Many Requests. "
+                                f"Backing off for {rate_limit_delay}s before retry (Execution: {execution_id})."
+                            )
+                            step_error = f"Rate limited (HTTP 429). Retrying after {rate_limit_delay}s."
+                            service_response = resp_data
+                            retries += 1
+                            if retries <= max_retries:
+                                await asyncio.sleep(rate_limit_delay)
+                                continue
+                            else:
+                                break
+
                         # Evaluate success based on HTTP status and customizable criteria
                         is_ok, err_msg = evaluate_success_criteria(resp_data, custom_criteria)
                         if is_ok and 200 <= resp.status_code < 300:
@@ -412,6 +428,8 @@ class Orchestrator:
                         else:
                             step_error = err_msg or resp_data.get("detail") or resp_data.get("error") or f"HTTP {resp.status_code}"
                             service_response = resp_data
+                    except httpx.TimeoutException as e:
+                        step_error = f"Request Timeout: {str(e)}"
                     except Exception as e:
                         step_error = str(e)
 
@@ -458,13 +476,18 @@ class Orchestrator:
                 return step_success, service_name, payload, responses[service_name], step_error, is_critical
 
             # Saga Rollback compensation helper
-            async def rollback_sequence(completed_steps_list):
+            async def rollback_sequence(completed_steps_list, failed_step_tuple=None):
                 token = await TokenManager.get_bearer_token(http_client)
                 headers = {"X-Execution-Id": execution_id}
                 if token:
                     headers["Authorization"] = f"Bearer {token}"
 
-                for name, payload_data, response_data in reversed(completed_steps_list):
+                # If failed step timed out on a mutating request, attempt compensation for it as well
+                steps_to_rollback = list(completed_steps_list)
+                if failed_step_tuple:
+                    steps_to_rollback.append(failed_step_tuple)
+
+                for name, payload_data, response_data in reversed(steps_to_rollback):
                     compensate_url = f"{config.FASTAPI_BASE_URL.rstrip('/')}/api/standalone/{name}/compensate"
                     try:
                         logger.info(f"SAGA: Calling compensation for service '{name}' at {compensate_url}")
@@ -502,7 +525,8 @@ class Orchestrator:
                                 execution.steps_data = [s for s in execution.steps_data if s["status"] != "PENDING"]
                                 db.commit()
                                 logger.error(f"[TASK_FAILED] Sequence {execution_id} marked as FAILED at step '{service_name}'. Initiating rollback.")
-                                await rollback_sequence(completed_steps)
+                                failed_tuple = (service_name, payload_data, service_resp) if "Timeout" in str(step_err) else None
+                                await rollback_sequence(completed_steps, failed_tuple)
                                 return
                             else:
                                 has_partial_failure = True
@@ -520,7 +544,8 @@ class Orchestrator:
                             execution.steps_data = [s for s in execution.steps_data if s["status"] != "PENDING"]
                             db.commit()
                             logger.error(f"[TASK_FAILED] Sequence {execution_id} marked as FAILED at step '{service_name}'. Initiating rollback.")
-                            await rollback_sequence(completed_steps)
+                            failed_tuple = (service_name, payload_data, service_resp) if "Timeout" in str(step_err) else None
+                            await rollback_sequence(completed_steps, failed_tuple)
                             return
                         else:
                             has_partial_failure = True

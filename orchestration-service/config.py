@@ -9,6 +9,10 @@ DATABASE_NAME = os.getenv("DB_NAME", "office_proj")
 POSTGRES_BASE_URL = f"postgresql+psycopg2://{DATABASE_USER}:{DATABASE_PASS}@{DATABASE_HOST}:{DATABASE_PORT}"
 DATABASE_URL = os.getenv("DATABASE_URL", f"{POSTGRES_BASE_URL}/{DATABASE_NAME}")
 
+# Database Connection Pool Settings
+DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "20"))
+DB_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "10"))
+
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
@@ -20,3 +24,6 @@ FASTAPI_BASE_URL = os.getenv("FASTAPI_BASE_URL", "http://localhost:8000")
 ORCHESTRATOR_AUTH_USERNAME = os.getenv("ORCHESTRATOR_AUTH_USERNAME", "admin")
 ORCHESTRATOR_AUTH_PASSWORD = os.getenv("ORCHESTRATOR_AUTH_PASSWORD", "admin12345")
 AUTH_TOKEN_CACHE_KEY = "los:orchestrator:jwt_token"
+
+# Rate Limit (429) Retry Delay in Seconds
+RATE_LIMIT_RETRY_DELAY_SECONDS = int(os.getenv("RATE_LIMIT_RETRY_DELAY_SECONDS", "60"))

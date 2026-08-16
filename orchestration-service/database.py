@@ -29,10 +29,17 @@ def init_database():
 init_database()
 
 connect_args = {}
+engine_kwargs = {}
 if config.DATABASE_URL.startswith("sqlite"):
     connect_args = {"check_same_thread": False}
+else:
+    engine_kwargs = {
+        "pool_size": config.DB_POOL_SIZE,
+        "max_overflow": config.DB_MAX_OVERFLOW,
+        "pool_pre_ping": True
+    }
 
-engine = create_engine(config.DATABASE_URL, connect_args=connect_args)
+engine = create_engine(config.DATABASE_URL, connect_args=connect_args, **engine_kwargs)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 

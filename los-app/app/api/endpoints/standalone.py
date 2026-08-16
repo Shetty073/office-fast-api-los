@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException, Query, Header
+from fastapi import APIRouter, HTTPException, Query, Header, Request
 from typing import Dict, Any, Optional
 from app.services.registry import ServiceRegistry
 from app.core.utils import APIClient
+from app.core.logger import request_id_ctx
 
 router = APIRouter()
 
@@ -9,6 +10,7 @@ router = APIRouter()
 async def call_standalone(
     service_name: str, 
     payload: Dict[str, Any], 
+    request: Request,
     mock: Optional[bool] = Query(None, description="Force enable/disable mock for this execution"),
     x_execution_source: Optional[str] = Header(default="standalone", alias="X-Execution-Source"),
     x_execution_id: Optional[str] = Header(default=None, alias="X-Execution-Id")
@@ -17,6 +19,8 @@ async def call_standalone(
     Standalone dynamic API call.
     Identifies whether called standalone by user or by the ARQ orchestrator via X-Execution-Source header.
     """
+    effective_exec_id = x_execution_id or request.headers.get("X-Request-ID") or request_id_ctx.get()
+
     try:
         service = ServiceRegistry.get(service_name)
     except KeyError:
@@ -24,7 +28,7 @@ async def call_standalone(
 
     result = await service.execute(
         payload=payload, 
-        execution_id=x_execution_id,
+        execution_id=effective_exec_id,
         mock_override=mock,
         execution_source=x_execution_source
     )
