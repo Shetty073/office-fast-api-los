@@ -29,7 +29,8 @@ def create_or_update_sequence_definition(
             default_inputs=payload.default_inputs,
             mappings=payload.mappings,
             success_conditions=payload.success_conditions,
-            conditions=payload.conditions
+            conditions=payload.conditions,
+            skip_conditions=payload.skip_conditions
         )
         return seq_def
     except KeyError as e:

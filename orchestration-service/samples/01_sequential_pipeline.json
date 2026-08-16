@@ -1,31 +1,87 @@
 {
-  "name": "01_pure_sequential_pipeline",
-  "description": "Standard linear sequential execution where Step 2 depends on Step 1 output",
+  "name": "jsonplaceholder_post_lifecycle_pipeline",
+  "description": "Complete lifecycle workflow without mocks: Creates a post, fetches it by ID, updates its content via PUT, and fetches the updated post to verify.",
   "sequence": [
-    "todo_service",
-    "post_service"
+    "create_post_service",
+    "get_post_service",
+    "update_post_service",
+    "get_post_service"
   ],
   "default_inputs": {
-    "todo_service": {
-      "_mock": true
+    "create_post_service": {
+      "userId": 1
     },
-    "post_service": {
-      "_mock": true
+    "get_post_service": {},
+    "update_post_service": {
+      "userId": 1
     }
   },
   "mappings": [
     {
       "from_service": "trigger_payload",
-      "from_field": "user_id",
-      "to_service": "todo_service",
-      "to_field": "todo_id"
+      "from_field": "post_title",
+      "to_service": "create_post_service",
+      "to_field": "title"
     },
     {
-      "from_service": "todo_service",
-      "from_field": "data.title",
-      "to_service": "post_service",
-      "to_field": "body",
-      "transform": "upper"
+      "from_service": "trigger_payload",
+      "from_field": "post_body",
+      "to_service": "create_post_service",
+      "to_field": "body"
+    },
+    {
+      "from_service": "create_post_service",
+      "from_field": "data.id",
+      "to_service": "get_post_service",
+      "to_field": "post_id"
+    },
+    {
+      "from_service": "create_post_service",
+      "from_field": "data.id",
+      "to_service": "update_post_service",
+      "to_field": "id"
+    },
+    {
+      "from_service": "trigger_payload",
+      "from_field": "update_title",
+      "to_service": "update_post_service",
+      "to_field": "title"
+    },
+    {
+      "from_service": "trigger_payload",
+      "from_field": "update_body",
+      "to_service": "update_post_service",
+      "to_field": "body"
+    }
+  ],
+  "success_conditions": {
+    "create_post_service": {
+      "expected_status_code": [200, 201],
+      "equals": {
+        "success": true
+      },
+      "types": {
+        "data.id": "int"
+      }
+    },
+    "get_post_service": {
+      "expected_status_code": 200,
+      "equals": {
+        "success": true
+      }
+    },
+    "update_post_service": {
+      "expected_status_code": 200,
+      "equals": {
+        "success": true
+      }
+    }
+  },
+  "skip_conditions": [
+    {
+      "service": "update_post_service",
+      "condition": "context.skip_update == True",
+      "reason": "Update skipped as per context flag"
     }
   ]
 }

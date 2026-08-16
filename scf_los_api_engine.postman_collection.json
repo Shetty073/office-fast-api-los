@@ -170,7 +170,7 @@
           "response": []
         },
         {
-          "name": "Todo Service (Plaintext)",
+          "name": "Create Post Service (REST API)",
           "request": {
             "method": "POST",
             "header": [
@@ -181,7 +181,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n    \"todo_id\": 1\n}",
+              "raw": "{\n    \"title\": \"Sample Post Title\",\n    \"body\": \"Sample post body created without mock\",\n    \"userId\": 1\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -189,27 +189,21 @@
               }
             },
             "url": {
-              "raw": "{{base_url}}/api/standalone/todo_service?mock=true",
+              "raw": "{{base_url}}/api/standalone/create_post_service",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "api",
                 "standalone",
-                "todo_service"
-              ],
-              "query": [
-                {
-                  "key": "mock",
-                  "value": "true"
-                }
+                "create_post_service"
               ]
             }
           },
           "response": []
         },
         {
-          "name": "Post Service (Plaintext)",
+          "name": "Get Post Service (REST API)",
           "request": {
             "method": "POST",
             "header": [
@@ -220,7 +214,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n    \"title\": \"Custom Post Title\",\n    \"body\": \"Custom post body text with PAN ABCDE1234F\",\n    \"userId\": 1\n}",
+              "raw": "{\n    \"post_id\": 1\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -228,20 +222,47 @@
               }
             },
             "url": {
-              "raw": "{{base_url}}/api/standalone/post_service?mock=true",
+              "raw": "{{base_url}}/api/standalone/get_post_service",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "api",
                 "standalone",
-                "post_service"
-              ],
-              "query": [
-                {
-                  "key": "mock",
-                  "value": "true"
+                "get_post_service"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update Post Service (REST API PUT)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"id\": 1,\n    \"title\": \"Updated Post Title\",\n    \"body\": \"Updated post body via PUT\",\n    \"userId\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
                 }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/standalone/update_post_service",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "standalone",
+                "update_post_service"
               ]
             }
           },

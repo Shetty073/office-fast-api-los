@@ -13,3 +13,4 @@ class SequenceDefinition(Base, TimestampMixin):
     mappings = Column(JSON, nullable=False, default=list)
     success_conditions = Column(JSON, nullable=True)
     conditions = Column(JSON, nullable=True)
+    skip_conditions = Column(JSON, nullable=True)

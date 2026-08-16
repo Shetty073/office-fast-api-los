@@ -1,29 +1,43 @@
 {
-  "name": "04_conditional_branching_pipeline",
-  "description": "Conditional execution where post_service only executes if todo_service was completed",
+  "name": "04_conditional_and_skip_conditions",
+  "description": "Demonstrates skip_conditions list to selectively bypass steps during execution based on payload, context, or prior step outputs",
   "sequence": [
-    "todo_service",
-    "post_service"
+    "create_post_service",
+    "get_post_service",
+    "update_post_service"
   ],
   "default_inputs": {
-    "todo_service": {
-      "todo_id": 4,
-      "_mock": true
-    },
-    "post_service": {
-      "title": "Conditional Execution Successful",
-      "_mock": true
+    "create_post_service": {
+      "title": "Initial Post",
+      "body": "Initial Post Body",
+      "userId": 1
     }
   },
   "mappings": [
     {
-      "from_service": "todo_service",
-      "from_field": "data.title",
-      "to_service": "post_service",
+      "from_service": "create_post_service",
+      "from_field": "data.id",
+      "to_service": "get_post_service",
+      "to_field": "post_id"
+    },
+    {
+      "from_service": "create_post_service",
+      "from_field": "data.id",
+      "to_service": "update_post_service",
+      "to_field": "id"
+    },
+    {
+      "from_service": "trigger_payload",
+      "from_field": "updated_content",
+      "to_service": "update_post_service",
       "to_field": "body"
     }
   ],
-  "conditions": {
-    "post_service": "responses.todo_service.data.completed == True"
-  }
+  "skip_conditions": [
+    {
+      "service": "update_post_service",
+      "condition": "responses.create_post_service.data.id > 100",
+      "reason": "Skip update for new mock posts"
+    }
+  ]
 }

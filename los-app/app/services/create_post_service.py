@@ -4,14 +4,14 @@ from app.services.registry import register_service
 from app.core.utils import APIClient
 
 @register_service
-class PostService(BaseService):
+class CreatePostService(BaseService):
     @property
     def name(self) -> str:
-        return "post_service"
+        return "create_post_service"
 
     @property
     def is_critical(self) -> bool:
-        return False
+        return True
 
     def get_mock_response(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return {

@@ -168,7 +168,7 @@ async def retry_chain(
         execution.status = "PENDING"
         execution.error_message = None
         
-        current_steps = list(execution.steps_data)
+        current_steps = [dict(s) for s in execution.steps_data]
         has_failed = False
         first_failed_idx = 0
         for idx, step in enumerate(current_steps):
@@ -186,6 +186,7 @@ async def retry_chain(
         execution.steps_data = current_steps
         execution.current_step = first_failed_idx
         db.commit()
+        db.refresh(execution)
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported retry strategy '{payload.strategy}'. Use 'restart' or 'resume'.")
 

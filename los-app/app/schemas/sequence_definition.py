@@ -11,6 +11,7 @@ class SequenceDefinitionCreateSchema(BaseModel):
     mappings: List[MappingSchema] = Field(default_factory=list, description="Parameter mappings from trigger payload / prior steps to downstream steps")
     success_conditions: Optional[Dict[str, Dict[str, Any]]] = Field(default=None, description="Custom success rules per service")
     conditions: Optional[Dict[str, str]] = Field(default=None, description="Execution boolean condition expressions per service")
+    skip_conditions: Optional[Union[List[Dict[str, Any]], Dict[str, Any]]] = Field(default=None, description="List of rules to skip a step based on condition evaluations")
 
 class SequenceDefinitionResponseSchema(SequenceDefinitionCreateSchema):
     id: str

@@ -19,7 +19,8 @@ class SequenceManager:
         default_inputs: Optional[Dict[str, Dict[str, Any]]] = None,
         mappings: Optional[List[Any]] = None,
         success_conditions: Optional[Dict[str, Dict[str, Any]]] = None,
-        conditions: Optional[Dict[str, str]] = None
+        conditions: Optional[Dict[str, str]] = None,
+        skip_conditions: Optional[Any] = None
     ) -> SequenceDefinition:
         for item in sequence:
             if isinstance(item, list):
@@ -47,6 +48,7 @@ class SequenceManager:
             existing.mappings = serialized_mappings
             existing.success_conditions = success_conditions
             existing.conditions = conditions
+            existing.skip_conditions = skip_conditions
             db.commit()
             db.refresh(existing)
             return existing
@@ -59,7 +61,8 @@ class SequenceManager:
             default_inputs=default_inputs or {},
             mappings=serialized_mappings,
             success_conditions=success_conditions,
-            conditions=conditions
+            conditions=conditions,
+            skip_conditions=skip_conditions
         )
         db.add(seq_def)
         db.commit()
@@ -171,6 +174,7 @@ class SequenceManager:
             success_conditions=seq_def.success_conditions,
             idempotency_key=idempotency_key,
             conditions=seq_def.conditions,
+            skip_conditions=seq_def.skip_conditions,
             context=context or {},
             callback_url=callback_url,
             status="PENDING",

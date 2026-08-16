@@ -9,10 +9,10 @@ from utils import get_by_path, set_by_path, SecretResolver, APIClient
 from database import init_database, get_db
 
 def test_evaluate_condition():
-    responses = {"todo_service": {"data": {"completed": True, "count": 5}}}
+    responses = {"create_post_service": {"data": {"completed": True, "count": 5}}}
     context = {"is_vip": True}
-    assert evaluate_condition("responses.todo_service.data.completed == True", responses, context) is True
-    assert evaluate_condition("responses.todo_service.data.count > 10", responses, context) is False
+    assert evaluate_condition("responses.create_post_service.data.completed == True", responses, context) is True
+    assert evaluate_condition("responses.create_post_service.data.count > 10", responses, context) is False
     assert evaluate_condition("context.is_vip == True", responses, context) is True
     assert evaluate_condition("invalid_expression ++++", responses, context) is False
     assert evaluate_condition("", responses, context) is True
@@ -59,8 +59,8 @@ def test_utils_get_and_set_by_path():
     set_by_path(target, "", 456)
 
 def test_secret_resolver():
-    with patch.dict("os.environ", {"TODO_SERVICE_API_KEY": "secret_key"}):
-        headers = SecretResolver.get_auth_headers("todo_service")
+    with patch.dict("os.environ", {"CREATE_POST_SERVICE_API_KEY": "secret_key"}):
+        headers = SecretResolver.get_auth_headers("create_post_service")
         assert headers["Authorization"] == "Bearer secret_key"
 
     with patch.dict("os.environ", {}, clear=True):
@@ -68,7 +68,7 @@ def test_secret_resolver():
         assert "Bearer mock-key-for-unknown" in headers["Authorization"]
 
 def test_api_client():
-    client = APIClient("todo_service", execution_id="exec-1")
+    client = APIClient("create_post_service", execution_id="exec-1")
     with patch("requests.request") as mock_req:
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -103,8 +103,8 @@ async def test_worker_tasks(db_session):
     exec_id = "test-worker-exec-1"
     exec_obj = SequenceExecution(
         id=exec_id,
-        sequence=["todo_service"],
-        inputs={"todo_service": {"todo_id": 1}},
+        sequence=["create_post_service"],
+        inputs={"create_post_service": {"title": "Post 1"}},
         mappings=[],
         status="PENDING",
         current_step=0,
@@ -119,7 +119,7 @@ async def test_worker_tasks(db_session):
 
     with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = httpx.Response(200, json={"status": "compensated"})
-        await rollback_sequence_task({}, exec_id, [("todo_service", {}, {})])
+        await rollback_sequence_task({}, exec_id, [("create_post_service", {}, {})])
         assert mock_post.called
 
 @pytest.mark.asyncio
@@ -150,22 +150,22 @@ async def test_orchestrator_full_workflow(db_session, db_session_factory):
     exec_obj = SequenceExecution(
         id=exec_id,
         sequence=[
-            "todo_service",
-            ["post_service"]
+            "create_post_service",
+            ["get_post_service"]
         ],
         inputs={
-            "todo_service": {},
-            "post_service": {}
+            "create_post_service": {},
+            "get_post_service": {}
         },
         trigger_payload={"user_code": "100", "status_tag": "vip"},
         mappings=[
-            {"from_service": "trigger_payload", "from_field": "user_code", "to_service": "todo_service", "to_field": "todo_id", "transform": "to_int"},
-            {"from_service": "trigger_payload", "from_field": "status_tag", "to_service": "todo_service", "to_field": "tag", "transform": "upper"},
-            {"from_service": "context", "from_field": "global_id", "to_service": "post_service", "to_field": "ctx_id", "transform": "to_str"},
-            {"from_service": "todo_service", "from_field": "title", "to_service": "post_service", "to_field": "title", "transform": "lower"}
+            {"from_service": "trigger_payload", "from_field": "user_code", "to_service": "create_post_service", "to_field": "user_id", "transform": "to_int"},
+            {"from_service": "trigger_payload", "from_field": "status_tag", "to_service": "create_post_service", "to_field": "tag", "transform": "upper"},
+            {"from_service": "context", "from_field": "global_id", "to_service": "get_post_service", "to_field": "ctx_id", "transform": "to_str"},
+            {"from_service": "create_post_service", "from_field": "id", "to_service": "get_post_service", "to_field": "post_id"}
         ],
         context={"global_id": 999},
-        conditions={"post_service": "responses.todo_service.data.completed == True"},
+        conditions={"get_post_service": "responses.create_post_service.data.id == 101"},
         status="PENDING",
         current_step=0,
         steps_data=[]
@@ -181,18 +181,18 @@ async def test_orchestrator_full_workflow(db_session, db_session_factory):
             return httpx.Response(200, json={"access_token": "mock-token", "expires_in_seconds": 3600})
         elif "compensate" in url:
             return httpx.Response(200, json={"status": "compensated"})
-        elif "todo_service" in url:
-            assert body.get("todo_id") == 100
+        elif "create_post_service" in url:
+            assert body.get("user_id") == 100
             assert body.get("tag") == "VIP"
             return httpx.Response(200, json={
                 "success": True,
-                "data": {"title": "HELLO TODO", "completed": True},
+                "data": {"id": 101, "title": "HELLO POST"},
                 "context_updates": {"step1_done": True}
             })
-        elif "post_service" in url:
-            assert body.get("title") == "hello todo"
+        elif "get_post_service" in url:
+            assert body.get("post_id") == 101
             assert body.get("ctx_id") == "999"
-            return httpx.Response(200, json={"success": True, "data": {"id": 1}})
+            return httpx.Response(200, json={"success": True, "data": {"id": 101, "title": "HELLO POST"}})
         return httpx.Response(404)
 
     transport = httpx.MockTransport(mock_handler)
@@ -207,14 +207,20 @@ async def test_orchestrator_full_workflow(db_session, db_session_factory):
     assert reloaded.context.get("step1_done") is True
 
 @pytest.mark.asyncio
-async def test_orchestrator_skipped_step(db_session, db_session_factory):
-    exec_id = "test-skip-step-1"
+async def test_orchestrator_skip_conditions_list(db_session, db_session_factory):
+    exec_id = "test-skip-conditions-list-1"
     exec_obj = SequenceExecution(
         id=exec_id,
-        sequence=["todo_service", "post_service"],
+        sequence=["create_post_service", "update_post_service"],
         inputs={},
         mappings=[],
-        conditions={"post_service": "False"},
+        skip_conditions=[
+            {
+                "service": "update_post_service",
+                "condition": "responses.create_post_service.data.id == 101",
+                "reason": "Skip update when post ID is 101"
+            }
+        ],
         status="PENDING",
         current_step=0,
         steps_data=[]
@@ -225,6 +231,8 @@ async def test_orchestrator_skipped_step(db_session, db_session_factory):
     async def mock_handler(request: httpx.Request):
         if "login" in str(request.url):
             return httpx.Response(200, json={"access_token": "mock-token"})
+        elif "create_post_service" in str(request.url):
+            return httpx.Response(200, json={"success": True, "data": {"id": 101}})
         return httpx.Response(200, json={"success": True, "data": {"id": 1}})
 
     transport = httpx.MockTransport(mock_handler)
@@ -237,3 +245,4 @@ async def test_orchestrator_skipped_step(db_session, db_session_factory):
     reloaded = db_session.query(SequenceExecution).filter(SequenceExecution.id == exec_id).first()
     assert reloaded.status == "COMPLETED"
     assert reloaded.steps_data[1]["status"] == "SKIPPED"
+    assert "Skip update when post ID is 101" in reloaded.steps_data[1]["error_message"]

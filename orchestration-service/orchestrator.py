@@ -246,7 +246,7 @@ class Orchestrator:
                     logger.info(f"[TASK_STEP_SKIPPED] Step {step_idx + 1} ({service_name}) already completed previously. Skipping.")
                     return True, service_name, step_info.get("input_payload", {}), step_info.get("output_response", {}), None, True
 
-                # Evaluate conditional skip expressions
+                # 1. Evaluate legacy conditions dict (run if True)
                 conditions_dict = execution.conditions or {}
                 condition_expr = conditions_dict.get(service_name)
                 if condition_expr and not evaluate_condition(condition_expr, responses, execution.context or {}):
@@ -254,6 +254,39 @@ class Orchestrator:
                     updated_step = dict(execution.steps_data[step_idx])
                     updated_step["status"] = "SKIPPED"
                     updated_step["error_message"] = "Condition evaluated to False"
+                    current_steps = [dict(s) for s in execution.steps_data]
+                    current_steps[step_idx] = updated_step
+                    execution.steps_data = current_steps
+                    db.commit()
+                    return True, service_name, {}, None, None, False
+
+                # 2. Evaluate skip_conditions (skip if condition evaluates to True)
+                # Supports list of dicts: [{"service": "post_service", "condition": "responses.get_post.data.id == 1", "reason": "Already exists"}]
+                # or dict: {"post_service": "responses.get_post.data.id == 1"}
+                skip_rules = execution.skip_conditions
+                should_skip = False
+                skip_reason = "Skip condition met"
+
+                if isinstance(skip_rules, list):
+                    for rule in skip_rules:
+                        target_srv = rule.get("service") or rule.get("service_name")
+                        expr = rule.get("condition") or rule.get("expr")
+                        if (target_srv is None or target_srv == service_name) and expr:
+                            if evaluate_condition(expr, responses, execution.context or {}):
+                                should_skip = True
+                                skip_reason = rule.get("reason", f"Skip condition '{expr}' met")
+                                break
+                elif isinstance(skip_rules, dict):
+                    expr = skip_rules.get(service_name)
+                    if expr and evaluate_condition(expr, responses, execution.context or {}):
+                        should_skip = True
+                        skip_reason = f"Skip condition '{expr}' met"
+
+                if should_skip:
+                    logger.info(f"[TASK_STEP_SKIPPED] Service '{service_name}' skipped: {skip_reason}")
+                    updated_step = dict(execution.steps_data[step_idx])
+                    updated_step["status"] = "SKIPPED"
+                    updated_step["error_message"] = skip_reason
                     current_steps = [dict(s) for s in execution.steps_data]
                     current_steps[step_idx] = updated_step
                     execution.steps_data = current_steps

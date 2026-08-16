@@ -144,10 +144,10 @@ def test_encryption_middleware_with_encrypted_user(client, db_session):
     headers = {"Authorization": f"Bearer {token}"}
 
     # Encrypt the input payload
-    raw_payload = json.dumps({"todo_id": 1})
+    raw_payload = json.dumps({"title": "Encrypted Post", "body": "Encrypted Body"})
     encrypted_body = encrypt_payload(raw_payload, enc_key)
 
-    res = client.post("/api/standalone/todo_service?mock=true", json=encrypted_body, headers=headers)
+    res = client.post("/api/standalone/create_post_service?mock=true", json=encrypted_body, headers=headers)
     assert res.status_code == 200
     
     # Response must also be encrypted
@@ -155,7 +155,7 @@ def test_encryption_middleware_with_encrypted_user(client, db_session):
     assert "ciphertext" in enc_resp
     decrypted_resp = json.loads(decrypt_payload(enc_resp, enc_key))
     assert decrypted_resp["success"] is True
-    assert decrypted_resp["data"]["id"] == 1
+    assert decrypted_resp["data"]["id"] == 101
 
 def test_hash_idempotency_middleware(client):
     mock_redis = AsyncMock()
@@ -163,22 +163,19 @@ def test_hash_idempotency_middleware(client):
     mock_redis.set = AsyncMock(side_effect=[True, False])
     
     with patch("app.middleware.idempotency.get_arq_redis", return_value=mock_redis):
-        # 1st request succeeds
-        res1 = client.post("/api/standalone/todo_service?mock=true", json={"todo_id": 2})
+        res1 = client.post("/api/standalone/create_post_service?mock=true", json={"title": "Test 1"})
+        res2 = client.post("/api/standalone/create_post_service?mock=true", json={"title": "Test 1"})
         assert res1.status_code == 200
-
-        # 2nd identical request is blocked with 409 Conflict
-        res2 = client.post("/api/standalone/todo_service?mock=true", json={"todo_id": 2})
         assert res2.status_code == 409
         assert "Duplicate request rejected" in res2.json()["detail"]
 
 def test_unauthenticated_request_blocked(unauthenticated_client):
     """Ensure all business endpoints strictly reject requests without Bearer token (401 Unauthorized)."""
-    res1 = unauthenticated_client.post("/api/standalone/todo_service", json={"todo_id": 1})
+    res1 = unauthenticated_client.post("/api/standalone/create_post_service", json={"title": "T1"})
     assert res1.status_code == 401
 
     res2 = unauthenticated_client.get("/api/sequences")
     assert res2.status_code == 401
 
-    res3 = unauthenticated_client.post("/api/chain/trigger", json={"sequence": ["todo_service"]})
+    res3 = unauthenticated_client.post("/api/chain/trigger", json={"sequence": ["create_post_service"]})
     assert res3.status_code == 401

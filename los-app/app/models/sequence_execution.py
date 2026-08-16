@@ -14,6 +14,7 @@ class SequenceExecution(Base, TimestampMixin):
     success_conditions = Column(JSON, nullable=True)
     idempotency_key = Column(String(100), nullable=True, unique=True, index=True)
     conditions = Column(JSON, nullable=True)
+    skip_conditions = Column(JSON, nullable=True)
     context = Column(JSON, nullable=True)
     callback_url = Column(String(500), nullable=True)
     status = Column(String(20), default="PENDING")
