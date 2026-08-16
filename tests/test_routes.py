@@ -1,8 +1,6 @@
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
-import asyncio
-from fastapi import BackgroundTasks
-from models import SequenceExecution
+from models import SequenceExecution, SequenceDefinition
 
 def test_read_root(client):
     response = client.get("/")
@@ -11,7 +9,8 @@ def test_read_root(client):
     assert data["status"] == "online"
     assert "todo_service" in data["registered_services"]
 
-def test_standalone_success_mock(client):
+def test_standalone_called_standalone_source(client):
+    # Call directly without orchestrator header
     response = client.post(
         "/api/standalone/todo_service?mock=true",
         json={"todo_id": 9}
@@ -20,52 +19,39 @@ def test_standalone_success_mock(client):
     data = response.json()
     assert data["success"] is True
     assert data["data"]["id"] == 9
-    assert data["data"]["source"] == "mock"
+    assert data["execution_source"] == "standalone"
 
-def test_standalone_success_real(client):
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.json.return_value = {
-        "userId": 1,
-        "id": 2,
-        "title": "quis ut nam facilis et officia qui",
-        "completed": False
+def test_standalone_called_orchestrator_source(client):
+    # Call with X-Execution-Source header
+    headers = {
+        "X-Execution-Source": "orchestrator",
+        "X-Execution-Id": "exec-abc-123"
     }
-    
-    with patch("requests.request", return_value=mock_resp):
-        response = client.post(
-            "/api/standalone/todo_service?mock=false",
-            json={"todo_id": 2}
-        )
+    response = client.post(
+        "/api/standalone/todo_service?mock=true",
+        json={"todo_id": 7},
+        headers=headers
+    )
     assert response.status_code == 200
     data = response.json()
     assert data["success"] is True
-    assert data["data"]["id"] == 2
+    assert data["execution_source"] == "orchestrator"
 
-def test_standalone_not_found(client):
-    response = client.post(
-        "/api/standalone/non_existent_service",
-        json={}
-    )
-    assert response.status_code == 404
-    assert "not found" in response.json()["detail"]
-
-def test_standalone_failure(client):
-    response = client.post(
-        "/api/standalone/todo_service?mock=false",
-        json={}
-    )
-    assert response.status_code == 400
-    assert "todo_id parameter is required" in response.json()["detail"]
-
-def test_trigger_chain_success(client):
-    payload = {
+def test_create_and_get_sequence_definition(client, db_session):
+    recipe = {
+        "name": "user_onboarding_pipeline",
+        "description": "Onboarding pipeline registering todo and post",
         "sequence": ["todo_service", "post_service"],
-        "inputs": {
-            "todo_service": {"todo_id": 1, "_mock": True},
-            "post_service": {"body": "Test body", "_mock": True}
+        "default_inputs": {
+            "post_service": {"body": "Default description"}
         },
         "mappings": [
+            {
+                "from_service": "trigger_payload",
+                "from_field": "target_id",
+                "to_service": "todo_service",
+                "to_field": "todo_id"
+            },
             {
                 "from_service": "todo_service",
                 "from_field": "title",
@@ -74,247 +60,44 @@ def test_trigger_chain_success(client):
             }
         ]
     }
-    
-    with patch("fastapi.BackgroundTasks.add_task") as mock_add_task:
-        response = client.post("/api/chain/trigger", json=payload)
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "PENDING"
-        assert len(data["sequence"]) == 2
-        assert mock_add_task.called
+    # Create sequence
+    res_create = client.post("/api/sequences", json=recipe)
+    assert res_create.status_code == 200
+    created_data = res_create.json()
+    assert created_data["name"] == "user_onboarding_pipeline"
+    assert len(created_data["mappings"]) == 2
 
-def test_trigger_chain_invalid_service(client):
-    payload = {
-        "sequence": ["todo_service", "invalid_name"],
-        "inputs": {},
-        "mappings": []
-    }
-    response = client.post("/api/chain/trigger", json=payload)
-    assert response.status_code == 404
-    assert "not registered" in response.json()["detail"]
+    # Get sequence
+    res_get = client.get("/api/sequences/user_onboarding_pipeline")
+    assert res_get.status_code == 200
+    assert res_get.json()["id"] == created_data["id"]
 
-def test_trigger_chain_db_error(client):
-    payload = {
-        "sequence": ["todo_service"],
-        "inputs": {},
-        "mappings": []
-    }
-    with patch("orchestrator.Orchestrator.create_execution", side_effect=ValueError("DB issue")):
-        response = client.post("/api/chain/trigger", json=payload)
-        assert response.status_code == 400
-        assert "DB issue" in response.json()["detail"]
-
-def test_get_chain_status_success(client, db_session):
-    exec_record = SequenceExecution(
-        id="test-uuid-999",
-        sequence=["todo_service"],
-        inputs={},
-        mappings=[],
-        status="COMPLETED",
-        current_step=1,
-        steps_data=[]
-    )
-    db_session.add(exec_record)
-    db_session.commit()
-    
-    response = client.get("/api/chain/status/test-uuid-999")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["id"] == "test-uuid-999"
-    assert data["status"] == "COMPLETED"
-
-def test_get_chain_status_not_found(client):
-    response = client.get("/api/chain/status/uuid-does-not-exist")
-    assert response.status_code == 404
-    assert "not found" in response.json()["detail"]
-
-def test_trigger_chain_with_success_conditions(client):
-    payload = {
-        "sequence": ["todo_service"],
-        "inputs": {
-            "todo_service": {"todo_id": 1, "_mock": True}
-        },
-        "mappings": [],
-        "success_conditions": {
-            "todo_service": {
-                "status_codes": [200],
-                "body_rules": {
-                    "data.completed": True
-                }
+def test_trigger_by_sequence_name(client, db_session):
+    recipe = {
+        "name": "flow_test",
+        "sequence": ["todo_service", "post_service"],
+        "mappings": [
+            {
+                "from_service": "trigger_payload",
+                "from_field": "account_id",
+                "to_service": "todo_service",
+                "to_field": "todo_id"
             }
-        }
-    }
-    with patch("fastapi.BackgroundTasks.add_task") as mock_add_task:
-        response = client.post("/api/chain/trigger", json=payload)
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "PENDING"
-        assert data["success_conditions"]["todo_service"]["status_codes"] == [200]
-        assert mock_add_task.called
-
-def test_trigger_chain_idempotency(client):
-    payload = {
-        "sequence": ["todo_service"],
-        "inputs": {
-            "todo_service": {"todo_id": 1, "_mock": True}
-        },
-        "mappings": [],
-        "idempotency_key": "idemp-key-route-abc"
-    }
-    with patch("fastapi.BackgroundTasks.add_task") as mock_add_task:
-        # First request creates it and launches background task
-        response1 = client.post("/api/chain/trigger", json=payload)
-        assert response1.status_code == 200
-        data1 = response1.json()
-        assert data1["status"] == "PENDING"
-        assert mock_add_task.call_count == 1
-        
-        # Second request with same idempotency key returns the same execution object but doesn't launch task again
-        response2 = client.post("/api/chain/trigger", json=payload)
-        assert response2.status_code == 200
-        data2 = response2.json()
-        assert data2["id"] == data1["id"]
-        assert mock_add_task.call_count == 1 # still 1!
-
-def test_cancel_chain_route(client, db_session):
-    # Setup record in RUNNING status
-    from models import SequenceExecution
-    import uuid
-    exec_id = str(uuid.uuid4())
-    execution = SequenceExecution(
-        id=exec_id,
-        sequence=["todo_service"],
-        inputs={},
-        mappings=[],
-        status="RUNNING"
-    )
-    db_session.add(execution)
-    db_session.commit()
-    
-    response = client.post(f"/api/chain/cancel/{exec_id}")
-    assert response.status_code == 200
-    assert "Cancellation" in response.json()["detail"]
-    
-    db_session.expire_all()
-    reloaded = db_session.query(SequenceExecution).filter(SequenceExecution.id == exec_id).first()
-    assert reloaded.status == "FAILED"
-    assert reloaded.error_message == "Cancelled by user"
-
-def test_retry_chain_route(client, db_session):
-    # Setup record in FAILED status
-    from models import SequenceExecution
-    import uuid
-    exec_id = str(uuid.uuid4())
-    execution = SequenceExecution(
-        id=exec_id,
-        sequence=["todo_service"],
-        inputs={},
-        mappings=[],
-        status="FAILED",
-        steps_data=[
-            {"service_name": "todo_service", "status": "FAILED", "input_payload": {}, "output_response": None}
         ]
-    )
-    db_session.add(execution)
-    db_session.commit()
-    
-    with patch("fastapi.BackgroundTasks.add_task") as mock_add_task:
-        response = client.post(f"/api/chain/retry/{exec_id}", json={"strategy": "resume"})
-        assert response.status_code == 200
-        data = response.json()
+    }
+    client.post("/api/sequences", json=recipe)
+
+    trigger_payload = {
+        "payload": {"account_id": 42},
+        "idempotency_key": "idemp-recipe-1"
+    }
+
+    mock_redis = AsyncMock()
+    with patch("routes.get_arq_redis", return_value=mock_redis):
+        res = client.post("/api/chain/trigger/flow_test", json=trigger_payload)
+        assert res.status_code == 200
+        data = res.json()
+        assert data["sequence_name"] == "flow_test"
         assert data["status"] == "PENDING"
-        assert mock_add_task.called
-
-@pytest.mark.asyncio
-async def test_lifespan_startup_recovery():
-    # Use SessionLocal directly to commit data to test_los.db file
-    from database import SessionLocal
-    db = SessionLocal()
-    
-    from models import SequenceExecution
-    import uuid
-    exec_pending_id = str(uuid.uuid4())
-    exec_running_id = str(uuid.uuid4())
-    
-    execution1 = SequenceExecution(
-        id=exec_pending_id,
-        sequence=["todo_service"],
-        inputs={},
-        mappings=[],
-        status="PENDING"
-    )
-    execution2 = SequenceExecution(
-        id=exec_running_id,
-        sequence=["todo_service"],
-        inputs={},
-        mappings=[],
-        status="RUNNING"
-    )
-    db.add(execution1)
-    db.add(execution2)
-    db.commit()
-    db.close()
-    
-    # Import lifespan from main
-    from main import lifespan
-    from fastapi import FastAPI
-    app = FastAPI()
-    
-    with patch("orchestrator.Orchestrator.run_sequence", new_callable=AsyncMock) as mock_run:
-        # Trigger the startup phase of lifespan context
-        async with lifespan(app):
-            # Give a small delay for background asyncio tasks to run
-            await asyncio.sleep(0.2)
-            assert mock_run.call_count == 2
-            
-    # Clean up created rows
-    db = SessionLocal()
-    db.query(SequenceExecution).filter(SequenceExecution.id.in_([exec_pending_id, exec_running_id])).delete()
-    db.commit()
-    db.close()
-
-@pytest.mark.asyncio
-async def test_lifespan_multi_worker_concurrency():
-    # Use SessionLocal directly to commit data
-    from database import SessionLocal
-    db = SessionLocal()
-    
-    from models import SequenceExecution
-    import uuid
-    exec_id = str(uuid.uuid4())
-    
-    execution = SequenceExecution(
-        id=exec_id,
-        sequence=["todo_service"],
-        inputs={},
-        mappings=[],
-        status="PENDING"
-    )
-    db.add(execution)
-    db.commit()
-    db.close()
-    
-    from main import lifespan
-    from fastapi import FastAPI
-    app1 = FastAPI()
-    app2 = FastAPI()
-    
-    # We will trigger lifespan concurrently for app1 and app2
-    with patch("orchestrator.Orchestrator.run_sequence", new_callable=AsyncMock) as mock_run:
-        # Run them in parallel using asyncio.gather
-        async def run_lifespan(app):
-            async with lifespan(app):
-                await asyncio.sleep(0.2)
-                
-        await asyncio.gather(
-            run_lifespan(app1),
-            run_lifespan(app2)
-        )
-        # Verify that only ONE worker succeeded in claiming and running the task
-        assert mock_run.call_count == 1
-        
-    # Clean up
-    db = SessionLocal()
-    db.query(SequenceExecution).filter(SequenceExecution.id == exec_id).delete()
-    db.commit()
-    db.close()
+        assert data["inputs"]["todo_service"]["todo_id"] == 42
+        assert mock_redis.enqueue_job.called

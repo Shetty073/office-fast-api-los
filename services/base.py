@@ -53,14 +53,14 @@ class BaseService(ABC):
         payload: Dict[str, Any], 
         execution_id: Optional[str] = None, 
         mock_override: Optional[bool] = None,
-        success_conditions: Optional[Dict[str, Any]] = None
+        success_conditions: Optional[Dict[str, Any]] = None,
+        execution_source: str = "standalone"
     ) -> Dict[str, Any]:
         """
         Standardized execution wrapper. Handles routing to mock behavior
         or executing actual logic, ensuring standard response formats,
         and validating against success conditions.
         """
-        # Determine if mocking is enabled: runtime payload override beats static settings
         should_mock = self.mock_enabled
         if mock_override is not None:
             should_mock = mock_override
@@ -76,7 +76,8 @@ class BaseService(ABC):
                     "success": True,
                     "data": mock_data,
                     "error": None,
-                    "status_code": 200
+                    "status_code": 200,
+                    "execution_source": execution_source
                 }
                 if context_updates:
                     result["context_updates"] = context_updates
@@ -85,14 +86,13 @@ class BaseService(ABC):
                     "success": False,
                     "data": None,
                     "error": f"Mock error: {str(e)}",
-                    "status_code": 500
+                    "status_code": 500,
+                    "execution_source": execution_source
                 }
         else:
-            # Real execution using DB-logging client
             client = APIClient(service_name=self.name, execution_id=execution_id, timeout=self.timeout)
             try:
                 result = await self._run(payload, client)
-                # Ensure compliance with standard response dictionary format
                 if not isinstance(result, dict) or "success" not in result:
                     result = {
                         "success": True,
@@ -100,18 +100,19 @@ class BaseService(ABC):
                         "error": None,
                         "status_code": 200
                     }
+                result["execution_source"] = execution_source
             except Exception as e:
                 result = {
                     "success": False,
                     "data": None,
                     "error": str(e),
-                    "status_code": 500
+                    "status_code": 500,
+                    "execution_source": execution_source
                 }
 
         # Apply success conditions checks
         conditions = success_conditions if success_conditions is not None else self.success_conditions
         if conditions and result.get("success"):
-            # Check status codes
             allowed_codes = conditions.get("status_codes")
             if allowed_codes is not None:
                 actual_code = result.get("status_code")
@@ -119,7 +120,6 @@ class BaseService(ABC):
                     result["success"] = False
                     result["error"] = f"Success condition failed: status code {actual_code} not in {allowed_codes}"
             
-            # Check body rules
             body_rules = conditions.get("body_rules")
             if body_rules and result.get("success"):
                 for path, expected_val in body_rules.items():

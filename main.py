@@ -1,11 +1,9 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
-from database import engine, Base, SessionLocal
+from database import engine, Base
 from routes import router
 import services  # Imports package to execute registration decorators for all services
-import asyncio
-from models import SequenceExecution
-from orchestrator import Orchestrator
+from redis_pool import init_redis_pool, close_redis_pool
 import logging
 
 logger = logging.getLogger(__name__)
@@ -15,41 +13,18 @@ Base.metadata.create_all(bind=engine)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup Recovery: Detect and resume pending/running executions that were interrupted.
-    # To prevent race conditions in multi-instance deployments, we atomically claim tasks using a unique worker ID.
-    import uuid
-    worker_id = str(uuid.uuid4())
-    db = SessionLocal()
+    # Initialize ARQ Redis connection pool
     try:
-        # Atomically claim any unclaimed PENDING or RUNNING task for this worker instance
-        db.query(SequenceExecution).filter(
-            SequenceExecution.status.in_(["PENDING", "RUNNING"]),
-            (SequenceExecution.error_message == None) | (~SequenceExecution.error_message.like("Recovering:%"))
-        ).update(
-            {
-                SequenceExecution.status: "PENDING",
-                SequenceExecution.error_message: f"Recovering:{worker_id}"
-            },
-            synchronize_session=False
-        )
-        db.commit()
-
-        # Query only the tasks successfully claimed by this worker
-        claimed_runs = db.query(SequenceExecution).filter(
-            SequenceExecution.error_message == f"Recovering:{worker_id}"
-        ).all()
-
-        if claimed_runs:
-            logger.info(f"Startup: Worker {worker_id} claimed {len(claimed_runs)} interrupted sequence executions. Resuming...")
-            for execution in claimed_runs:
-                # Spawn non-blocking background task to resume execution.
-                # error_message is kept as 'Recovering:{worker_id}' to serve as an active claim indicator.
-                asyncio.create_task(Orchestrator.run_sequence(execution.id, lambda: SessionLocal()))
+        await init_redis_pool()
+        logger.info("FastAPI connected to ARQ Redis pool successfully.")
     except Exception as e:
-        logger.error(f"Startup: Failed to recover interrupted tasks: {e}")
-    finally:
-        db.close()
+        logger.warning(f"Could not connect to Redis at startup: {e}")
+    
     yield
+    
+    # Graceful shutdown of Redis connection pool
+    await close_redis_pool()
+    logger.info("FastAPI closed ARQ Redis pool.")
 
 app = FastAPI(
     title="SCF LOS API Engine",

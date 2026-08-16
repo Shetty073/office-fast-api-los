@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "a4d33939-e470-424a-b51f-506bc1cd79a0",
     "name": "SCF LOS API Engine",
-    "description": "Postman Collection for SCF LOS API Engine",
+    "description": "Postman Collection for SCF LOS API Engine with Generic Database-Driven ARQ Orchestration",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -58,13 +58,13 @@
       "response": []
     },
     {
-      "name": "Trigger Chain - Sequential with Idempotency",
+      "name": "Standalone Service - Post Service (Mock)",
       "request": {
         "method": "POST",
         "header": [],
         "body": {
           "mode": "raw",
-          "raw": "{\n    \"sequence\": [\n        \"todo_service\",\n        \"post_service\"\n    ],\n    \"inputs\": {\n        \"todo_service\": {\n            \"todo_id\": 2\n        },\n        \"post_service\": {\n            \"body\": \"Sequential execution body text\",\n            \"userId\": 5\n        }\n    },\n    \"mappings\": [\n        {\n            \"from_service\": \"todo_service\",\n            \"from_field\": \"title\",\n            \"to_service\": \"post_service\",\n            \"to_field\": \"title\"\n        }\n    ],\n    \"idempotency_key\": \"idemp-key-example-1234\"\n}",
+          "raw": "{\n    \"title\": \"Custom Post Title\",\n    \"body\": \"Custom post body text\",\n    \"userId\": 1\n}",
           "options": {
             "raw": {
               "language": "json"
@@ -72,27 +72,33 @@
           }
         },
         "url": {
-          "raw": "{{base_url}}/api/chain/trigger",
+          "raw": "{{base_url}}/api/standalone/post_service?mock=true",
           "host": [
             "{{base_url}}"
           ],
           "path": [
             "api",
-            "chain",
-            "trigger"
+            "standalone",
+            "post_service"
+          ],
+          "query": [
+            {
+              "key": "mock",
+              "value": "true"
+            }
           ]
         }
       },
       "response": []
     },
     {
-      "name": "Trigger Chain - Parallel Execution (Fork-Join)",
+      "name": "Sequence Recipes - Register / Update Recipe in DB",
       "request": {
         "method": "POST",
         "header": [],
         "body": {
           "mode": "raw",
-          "raw": "{\n    \"sequence\": [\n        \"todo_service\",\n        [\n            \"post_service\"\n        ]\n    ],\n    \"inputs\": {\n        \"todo_service\": {\n            \"todo_id\": 1\n        },\n        \"post_service\": {\n            \"title\": \"Parallel Run Title\",\n            \"body\": \"Parallel execution body text\",\n            \"userId\": 1\n        }\n    },\n    \"mappings\": []\n}",
+          "raw": "{\n    \"name\": \"user_onboarding_flow\",\n    \"description\": \"Onboarding pipeline: fetches todo item and maps its title to post body\",\n    \"sequence\": [\n        \"todo_service\",\n        \"post_service\"\n    ],\n    \"default_inputs\": {\n        \"todo_service\": {\n            \"_mock\": true\n        },\n        \"post_service\": {\n            \"title\": \"Automated Onboarding Post\",\n            \"_mock\": true\n        }\n    },\n    \"mappings\": [\n        {\n            \"from_service\": \"trigger_payload\",\n            \"from_field\": \"customer_id\",\n            \"to_service\": \"todo_service\",\n            \"to_field\": \"todo_id\"\n        },\n        {\n            \"from_service\": \"todo_service\",\n            \"from_field\": \"data.title\",\n            \"to_service\": \"post_service\",\n            \"to_field\": \"body\"\n        }\n    ]\n}",
           "options": {
             "raw": {
               "language": "json"
@@ -100,27 +106,92 @@
           }
         },
         "url": {
-          "raw": "{{base_url}}/api/chain/trigger",
+          "raw": "{{base_url}}/api/sequences",
           "host": [
             "{{base_url}}"
           ],
           "path": [
             "api",
-            "chain",
-            "trigger"
+            "sequences"
           ]
         }
       },
       "response": []
     },
     {
-      "name": "Trigger Chain - Conditional Routing & Webhooks",
+      "name": "Sequence Recipes - List All Registered Recipes",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/sequences",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "sequences"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Sequence Recipes - Get Recipe Details",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/sequences/user_onboarding_flow",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "sequences",
+            "user_onboarding_flow"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Trigger Sequence by Name (via ARQ Queue)",
       "request": {
         "method": "POST",
         "header": [],
         "body": {
           "mode": "raw",
-          "raw": "{\n    \"sequence\": [\n        \"todo_service\",\n        \"post_service\"\n    ],\n    \"inputs\": {\n        \"todo_service\": {\n            \"todo_id\": 2\n        },\n        \"post_service\": {\n            \"body\": \"Conditional post execution body\"\n        }\n    },\n    \"mappings\": [\n        {\n            \"from_service\": \"todo_service\",\n            \"from_field\": \"id\",\n            \"to_service\": \"post_service\",\n            \"to_field\": \"userId\",\n            \"transform\": \"to_int\"\n        }\n    ],\n    \"conditions\": {\n        \"post_service\": \"responses.todo_service.data.completed == True\"\n    },\n    \"context\": {\n        \"client_type\": \"premium\"\n    },\n    \"callback_url\": \"https://your.webhook.domain/callbacks\"\n}",
+          "raw": "{\n    \"payload\": {\n        \"customer_id\": 7\n    },\n    \"idempotency_key\": \"idemp-postman-001\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{base_url}}/api/chain/trigger/user_onboarding_flow",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "chain",
+            "trigger",
+            "user_onboarding_flow"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Trigger Sequence - Ad-hoc Custom Sequence (via ARQ Queue)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"sequence\": [\n        \"todo_service\",\n        [\n            \"post_service\"\n        ]\n    ],\n    \"inputs\": {\n        \"todo_service\": {\n            \"todo_id\": 2,\n            \"_mock\": true\n        },\n        \"post_service\": {\n            \"title\": \"Parallel Step Post\",\n            \"body\": \"Dynamic Body\",\n            \"_mock\": true\n        }\n    },\n    \"mappings\": [\n        {\n            \"from_service\": \"todo_service\",\n            \"from_field\": \"data.title\",\n            \"to_service\": \"post_service\",\n            \"to_field\": \"body\"\n        }\n    ],\n    \"idempotency_key\": \"idemp-adhoc-001\"\n}",
           "options": {
             "raw": {
               "language": "json"
@@ -243,8 +314,7 @@
   "variable": [
     {
       "key": "base_url",
-      "value": "http://localhost:8000",
-      "type": "string"
+      "value": "http://127.0.0.1:8000"
     }
   ]
 }

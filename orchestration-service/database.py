@@ -10,7 +10,6 @@ def init_database():
         return
     try:
         if "postgresql" in db_url:
-            # Connect to default 'postgres' db to create the target db if missing
             postgres_admin_url = f"postgresql+psycopg2://{config.DATABASE_USER}:{config.DATABASE_PASS}@{config.DATABASE_HOST}:{config.DATABASE_PORT}/postgres"
             temp_engine = create_engine(postgres_admin_url, isolation_level="AUTOCOMMIT")
             with temp_engine.connect() as conn:

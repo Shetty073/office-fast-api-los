@@ -1,13 +1,13 @@
-import uuid
 import time
 import asyncio
 import logging
+import httpx
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Union
 from sqlalchemy.orm import Session
 from models import SequenceExecution
-from services.registry import ServiceRegistry
-from utils import get_by_path, set_by_path, APIClient
+from utils import get_by_path, set_by_path
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -47,86 +47,24 @@ def evaluate_condition(expression: str, responses: Dict[str, Any], context: Dict
         return False
 
 class Orchestrator:
+    """
+    Generic, dynamic HTTP-based Orchestrator.
+    Dispatches steps to FastAPI standalone endpoints, evaluates data mappings,
+    handles exponential retries, and executes Saga rollbacks.
+    """
     active_tasks: Dict[str, asyncio.Task] = {}
 
-    @staticmethod
-    def create_execution(
-        db: Session, 
-        sequence: List[Union[str, List[str]]], 
-        inputs: Dict[str, Any], 
-        mappings: List[Any],
-        success_conditions: Optional[Dict[str, Dict[str, Any]]] = None,
-        idempotency_key: Optional[str] = None,
-        conditions: Optional[Dict[str, str]] = None,
-        context: Optional[Dict[str, Any]] = None,
-        callback_url: Optional[str] = None
-    ) -> SequenceExecution:
-        """
-        Validate services exist, initialize the sequence execution model and save to the DB.
-        Checks idempotency key to prevent duplicate runs.
-        """
-        if idempotency_key:
-            existing = db.query(SequenceExecution).filter(
-                SequenceExecution.idempotency_key == idempotency_key
-            ).first()
-            if existing:
-                existing._is_new = False
-                return existing
-
-        # Ensure all services exist
-        for item in sequence:
-            if isinstance(item, list):
-                for name in item:
-                    try:
-                        ServiceRegistry.get(name)
-                    except KeyError:
-                        raise KeyError(f"Service '{name}' is not registered and cannot be sequenced.")
-            else:
-                try:
-                    ServiceRegistry.get(item)
-                except KeyError:
-                    raise KeyError(f"Service '{item}' is not registered and cannot be sequenced.")
-
-        # Serialize mappings to dicts
-        serialized_mappings = []
-        for m in mappings:
-            if hasattr(m, "model_dump"):
-                serialized_mappings.append(m.model_dump())
-            elif isinstance(m, dict):
-                serialized_mappings.append(m)
-            else:
-                serialized_mappings.append(dict(m))
-
-        execution = SequenceExecution(
-            id=str(uuid.uuid4()),
-            sequence=sequence,
-            inputs=inputs,
-            mappings=serialized_mappings,
-            success_conditions=success_conditions,
-            idempotency_key=idempotency_key,
-            conditions=conditions,
-            context=context or {},
-            callback_url=callback_url,
-            status="PENDING",
-            current_step=0,
-            steps_data=[]
-        )
-        db.add(execution)
-        db.commit()
-        db.refresh(execution)
-        execution._is_new = True
-        return execution
-
     @classmethod
-    async def run_sequence(cls, execution_id: str, get_db_session):
-        """
-        Runs the sequence of service calls asynchronously in a background worker task context.
-        Provides support for inputs mapping, retries, step latency logging, Saga rollbacks,
-        parallel executions, and partial success states.
-        """
+    async def run_sequence(cls, execution_id: str, get_db_session, http_client: Optional[httpx.AsyncClient] = None):
         cls.active_tasks[execution_id] = asyncio.current_task()
         db_gen = get_db_session()
         db = next(db_gen)
+        
+        should_close_client = False
+        if http_client is None:
+            http_client = httpx.AsyncClient(timeout=30.0)
+            should_close_client = True
+
         try:
             execution = db.query(SequenceExecution).filter(SequenceExecution.id == execution_id).first()
             if not execution:
@@ -137,7 +75,7 @@ class Orchestrator:
             db.commit()
 
             responses: Dict[str, Dict[str, Any]] = {}
-            completed_steps = []  # List of tuples: (service_name, input_payload, output_response)
+            completed_steps = []  # Tuples: (service_name, input_payload, output_response)
             has_partial_failure = False
 
             # Initialize steps_data structure for all steps upfront if not already populated
@@ -165,20 +103,18 @@ class Orchestrator:
                 execution.steps_data = steps_data
                 db.commit()
 
-            # Helper for executing a single step logic
+            # Helper for executing a single step over HTTP to FastAPI
             async def run_single_step(service_name: str, step_idx: int):
-                # Check if this step is already completed from a previous run (Resume strategy)
+                # Resume strategy check
                 if step_idx < len(execution.steps_data) and execution.steps_data[step_idx]["status"] == "COMPLETED":
                     logger.info(f"Resume: Skipping already completed step '{service_name}'")
                     cached_response = execution.steps_data[step_idx]["output_response"]
                     responses[service_name] = cached_response
                     cached_payload = execution.steps_data[step_idx]["input_payload"]
                     completed_steps.append((service_name, cached_payload, cached_response))
-                    return True, service_name, cached_payload, cached_response, None
+                    return True, service_name, cached_payload, cached_response, None, True
 
-                service = ServiceRegistry.get(service_name)
-                
-                # Evaluate execution condition if defined
+                # Evaluate execution condition
                 condition = None
                 if execution.conditions and isinstance(execution.conditions, dict):
                     condition = execution.conditions.get(service_name)
@@ -205,7 +141,7 @@ class Orchestrator:
                     db.commit()
                     
                     responses[service_name] = {"success": True, "data": None, "status_code": 200, "skipped": True}
-                    return True, service_name, {}, responses[service_name], None
+                    return True, service_name, {}, responses[service_name], None, True
 
                 step_info = {
                     "service_name": service_name,
@@ -218,38 +154,34 @@ class Orchestrator:
                     "duration_ms": 0,
                     "retry_count": 0
                 }
-                
-                # Update steps_data to RUNNING
                 current_steps = list(execution.steps_data)
                 current_steps[step_idx] = step_info
                 execution.steps_data = current_steps
                 db.commit()
 
-                # Copy service static inputs
+                # Start with static inputs for this service
                 payload = execution.inputs.get(service_name, {}).copy()
 
-                # Extract optional runtime mock override from input parameters
-                mock_override = payload.pop("_mock", None)
-
-                # Resolve incoming mappings from previous service output fields or global context
+                # Dynamic parameter mapping from trigger_payload, context, or previous step outputs
                 for mapping in execution.mappings:
                     if mapping.get("to_service") == service_name:
                         from_service = mapping.get("from_service")
+                        from_field = mapping.get("from_field")
                         val = None
                         
-                        if from_service == "context":
+                        if from_service == "trigger_payload":
+                            trigger_data = execution.trigger_payload or {}
+                            val = get_by_path(trigger_data, from_field)
+                        elif from_service == "context":
                             source_data = execution.context or {}
-                            from_field = mapping.get("from_field")
                             val = get_by_path(source_data, from_field)
                         elif from_service in responses:
                             prev_response = responses[from_service]
                             if prev_response.get("success") and prev_response.get("data") is not None:
                                 source_data = prev_response["data"]
-                                from_field = mapping.get("from_field")
                                 val = get_by_path(source_data, from_field)
                                 
                         if val is not None:
-                            # Apply transformations
                             transform_type = mapping.get("transform")
                             if transform_type == "to_int":
                                 try:
@@ -272,13 +204,20 @@ class Orchestrator:
                 execution.steps_data = current_steps
                 db.commit()
 
-                # Executing retry loop
+                # Execute HTTP call to FastAPI with retries & backoff
                 retries = 0
-                max_retries = service.max_retries
+                max_retries = 3
                 step_success = False
                 service_response = None
                 step_error = None
+                is_critical = True
                 start_step_time = time.time()
+                endpoint_url = f"{config.FASTAPI_BASE_URL.rstrip('/')}/api/standalone/{service_name}"
+
+                headers = {
+                    "X-Execution-Source": "orchestrator",
+                    "X-Execution-Id": execution_id
+                }
 
                 while retries <= max_retries:
                     step_info["retry_count"] = retries
@@ -288,27 +227,24 @@ class Orchestrator:
                     db.commit()
 
                     try:
-                        conditions = None
-                        if execution.success_conditions and isinstance(execution.success_conditions, dict):
-                            conditions = execution.success_conditions.get(service_name)
+                        resp = await http_client.post(endpoint_url, json=payload, headers=headers)
+                        try:
+                            resp_data = resp.json()
+                        except Exception:
+                            resp_data = {"text": resp.text}
 
-                        service_response = await service.execute(
-                            payload=payload, 
-                            execution_id=execution_id, 
-                            mock_override=mock_override,
-                            success_conditions=conditions
-                        )
-                        if service_response.get("success"):
+                        if 200 <= resp.status_code < 300 and resp_data.get("success", True):
                             step_success = True
+                            service_response = resp_data
                             break
                         else:
-                            step_error = service_response.get("error", "Service execution succeeded but returned success=False")
+                            step_error = resp_data.get("detail") or resp_data.get("error") or f"HTTP {resp.status_code}"
+                            service_response = resp_data
                     except Exception as e:
                         step_error = str(e)
 
                     retries += 1
                     if retries <= max_retries:
-                        # Exponential backoff with Jitter
                         import random
                         backoff = 1.0 * (2 ** (retries - 1))
                         jitter = random.uniform(0.0, 0.5)
@@ -322,7 +258,7 @@ class Orchestrator:
                     step_info["output_response"] = service_response
                     responses[service_name] = service_response
                     
-                    # Merge context updates into global execution context state
+                    # Merge context updates
                     if service_response and isinstance(service_response, dict):
                         context_updates = service_response.get("context_updates")
                         if context_updates and isinstance(context_updates, dict):
@@ -333,36 +269,35 @@ class Orchestrator:
                 else:
                     step_info["status"] = "FAILED"
                     step_info["error_message"] = step_error
-                    if service_response:
-                        step_info["output_response"] = service_response
-                        responses[service_name] = service_response
-                    else:
-                        responses[service_name] = {
-                            "success": False,
-                            "data": None,
-                            "error": step_error,
-                            "status_code": 500
-                        }
+                    step_info["output_response"] = service_response
+                    responses[service_name] = service_response or {
+                        "success": False,
+                        "error": step_error,
+                        "status_code": 500
+                    }
 
                 current_steps = list(execution.steps_data)
                 current_steps[step_idx] = step_info
                 execution.steps_data = current_steps
                 db.commit()
 
-                return step_success, service_name, payload, service_response or responses[service_name], step_error
+                return step_success, service_name, payload, responses[service_name], step_error, is_critical
 
-            # Helper to execute compensating transaction rollback logic (Saga Pattern)
+            # Saga Rollback compensation helper
             async def rollback_sequence(completed_steps_list):
-                for name, payload, response in reversed(completed_steps_list):
-                    service = ServiceRegistry.get(name)
-                    client = APIClient(service_name=service.name, execution_id=execution_id, timeout=service.timeout)
+                for name, payload_data, response_data in reversed(completed_steps_list):
+                    compensate_url = f"{config.FASTAPI_BASE_URL.rstrip('/')}/api/standalone/{name}/compensate"
                     try:
-                        logger.info(f"SAGA: Running compensating transaction for service '{name}'")
-                        await service.compensate(payload=payload, response=response, client=client)
+                        logger.info(f"SAGA: Calling compensation for service '{name}' at {compensate_url}")
+                        await http_client.post(
+                            compensate_url,
+                            json={"input_payload": payload_data, "output_response": response_data},
+                            headers={"X-Execution-Id": execution_id}
+                        )
                     except Exception as e:
-                        logger.error(f"SAGA: Compensating transaction failed for service '{name}': {e}")
+                        logger.error(f"SAGA: Compensation failed for service '{name}': {e}")
 
-            # Main sequence execution block loop
+            # Main sequence loop
             flat_idx = 0
             for idx, step_item in enumerate(execution.sequence):
                 execution.current_step = idx + 1
@@ -376,20 +311,15 @@ class Orchestrator:
                         flat_idx += 1
                     
                     results = await asyncio.gather(*tasks, return_exceptions=True)
-                    
-                    # Process execution results
                     for res in results:
                         if isinstance(res, Exception):
                             raise res
                         
-                        step_success, service_name, payload, service_response, step_err = res
+                        step_success, service_name, payload_data, service_resp, step_err, is_crit = res
                         if not step_success:
-                            service = ServiceRegistry.get(service_name)
-                            if service.is_critical:
-                                # Critical step failed - trigger SAGA rollback
+                            if is_crit:
                                 execution.status = "FAILED"
-                                execution.error_message = f"Failed at critical parallel step {service_name}: {step_err}"
-                                # Remove PENDING placeholders to match sequential flow behavior
+                                execution.error_message = f"Failed at critical step {service_name}: {step_err}"
                                 execution.steps_data = [s for s in execution.steps_data if s["status"] != "PENDING"]
                                 db.commit()
                                 await rollback_sequence(completed_steps)
@@ -397,20 +327,16 @@ class Orchestrator:
                             else:
                                 has_partial_failure = True
                         else:
-                            completed_steps.append((service_name, payload, service_response))
+                            completed_steps.append((service_name, payload_data, service_resp))
                 else:
-                    # Sequential step execution
                     service_name = step_item
-                    step_success, service_name, payload, service_response, step_err = await run_single_step(service_name, flat_idx)
+                    step_success, service_name, payload_data, service_resp, step_err, is_crit = await run_single_step(service_name, flat_idx)
                     flat_idx += 1
 
                     if not step_success:
-                        service = ServiceRegistry.get(service_name)
-                        if service.is_critical:
-                            # Critical step failed - trigger SAGA rollback
+                        if is_crit:
                             execution.status = "FAILED"
                             execution.error_message = f"Failed at critical step {service_name}: {step_err}"
-                            # Remove PENDING placeholders to match sequential flow behavior
                             execution.steps_data = [s for s in execution.steps_data if s["status"] != "PENDING"]
                             db.commit()
                             await rollback_sequence(completed_steps)
@@ -418,14 +344,13 @@ class Orchestrator:
                         else:
                             has_partial_failure = True
                     else:
-                        completed_steps.append((service_name, payload, service_response))
+                        completed_steps.append((service_name, payload_data, service_resp))
 
-            # Finalize overall execution status
             execution.status = "PARTIAL_SUCCESS" if has_partial_failure else "COMPLETED"
             db.commit()
 
         except asyncio.CancelledError:
-            logger.info(f"Execution {execution_id} was cancelled by user request.")
+            logger.info(f"Execution {execution_id} cancelled.")
             try:
                 execution = db.query(SequenceExecution).filter(SequenceExecution.id == execution_id).first()
                 if execution:
@@ -438,7 +363,7 @@ class Orchestrator:
             await rollback_sequence(completed_steps)
             raise
         except Exception as e:
-            logger.exception(f"Internal Orchestrator failure: {e}")
+            logger.exception(f"Orchestrator internal failure: {e}")
             try:
                 execution = db.query(SequenceExecution).filter(SequenceExecution.id == execution_id).first()
                 if execution:
@@ -449,38 +374,9 @@ class Orchestrator:
                 pass
         finally:
             cls.active_tasks.pop(execution_id, None)
+            if should_close_client and http_client:
+                await http_client.aclose()
             try:
-                # Re-fetch database object inside a clean scoped session to avoid connection closed error on webhook POST
-                db_gen_wh = get_db_session()
-                db_wh = next(db_gen_wh)
-                try:
-                    execution = db_wh.query(SequenceExecution).filter(SequenceExecution.id == execution_id).first()
-                    if execution and execution.callback_url:
-                        def send_webhook(url: str, payload: dict):
-                            try:
-                                import requests
-                                requests.post(url, json=payload, timeout=5.0)
-                            except Exception as err:
-                                logger.error(f"Failed to send webhook callback: {err}")
-                                
-                        payload = {
-                            "execution_id": execution.id,
-                            "status": execution.status,
-                            "error_message": execution.error_message,
-                            "context": execution.context,
-                            "steps_data": execution.steps_data
-                        }
-                        loop = asyncio.get_running_loop()
-                        loop.run_in_executor(None, send_webhook, execution.callback_url, payload)
-                finally:
-                    try:
-                        next(db_gen_wh)
-                    except StopIteration:
-                        pass
-            except Exception as wh_err:
-                logger.error(f"Webhook dispatch system error: {wh_err}")
-            finally:
-                try:
-                    next(db_gen)
-                except StopIteration:
-                    pass
+                next(db_gen)
+            except StopIteration:
+                pass
