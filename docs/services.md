@@ -31,16 +31,22 @@ los-app/
 │   ├── schemas/
 │   │   ├── mapping.py
 │   │   ├── sequence_definition.py
-│   │   └── sequence_execution.py
+│   │   ├── sequence_execution.py
+│   │   └── auth.py
 │   └── services/
-│       ├── base.py              # BaseService abstract class
-│       ├── registry.py          # ServiceRegistry & @register_service decorator
-│       ├── todo_service.py      # Example integration
-│       └── post_service.py      # Example integration
+│       ├── base.py                 # BaseService abstract class
+│       ├── registry.py             # ServiceRegistry & @register_service decorator
+│       ├── create_post_service.py  # JSONPlaceholder POST integration
+│       ├── get_post_service.py     # JSONPlaceholder GET integration
+│       └── update_post_service.py  # JSONPlaceholder PUT integration
 └── tests/
     ├── conftest.py
     ├── test_models.py
-    ├── test_routes.py
+    ├── test_standalone_routes.py
+    ├── test_sequence_routes.py
+    ├── test_chain_routes.py
+    ├── test_auth_and_middleware.py
+    ├── test_security.py
     └── test_services.py
 ```
 
