@@ -1,7 +1,7 @@
 from typing import Dict, Any
-from services.base import BaseService
-from services.registry import register_service
-from utils import APIClient
+from app.services.base import BaseService
+from app.services.registry import register_service
+from app.core.utils import APIClient
 
 @register_service
 class TodoService(BaseService):
@@ -15,10 +15,7 @@ class TodoService(BaseService):
             "status_codes": [200]
         }
 
-    # mock_enabled is False by default
-
     def get_mock_response(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Provides mock todo data."""
         todo_id = payload.get("todo_id", 1)
         return {
             "userId": 99,
@@ -29,7 +26,6 @@ class TodoService(BaseService):
         }
 
     async def _run(self, payload: Dict[str, Any], client: APIClient) -> Dict[str, Any]:
-        """Runs the actual HTTP request using the DB-logging client."""
         todo_id = payload.get("todo_id")
         if not todo_id:
             return {
@@ -57,7 +53,5 @@ class TodoService(BaseService):
         }
 
     async def compensate(self, payload: Dict[str, Any], response: Dict[str, Any], client: APIClient) -> None:
-        """Simulate Saga compensating rollback transaction."""
         todo_id = payload.get("todo_id")
-        # Log the delete action using client wrapper to record the compensation
         client.delete(f"https://jsonplaceholder.typicode.com/todos/{todo_id}")

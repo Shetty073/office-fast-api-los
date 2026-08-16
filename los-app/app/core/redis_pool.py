@@ -1,7 +1,7 @@
 from arq import create_pool
 from arq.connections import RedisSettings, ArqRedis
 from typing import Optional
-import config
+from app.core import config
 
 _arq_redis_pool: Optional[ArqRedis] = None
 

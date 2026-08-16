@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
-from models import SequenceExecution, SequenceDefinition
+from app.models.sequence_execution import SequenceExecution
+from app.models.sequence_definition import SequenceDefinition
 
 def test_read_root(client):
     response = client.get("/")
@@ -113,7 +114,7 @@ def test_create_sequence_invalid_service(client):
     assert res.status_code == 404
 
 def test_create_sequence_error_handling(client):
-    with patch("sequence_manager.SequenceManager.create_definition", side_effect=ValueError("Invalid config")):
+    with patch("app.services.sequence_manager.SequenceManager.create_definition", side_effect=ValueError("Invalid config")):
         res = client.post("/api/sequences", json={"name": "test", "sequence": ["todo_service"]})
         assert res.status_code == 400
 
@@ -142,7 +143,7 @@ def test_trigger_by_sequence_name(client, db_session):
     }
 
     mock_redis = AsyncMock()
-    with patch("routes.get_arq_redis", return_value=mock_redis):
+    with patch("app.api.endpoints.chain.get_arq_redis", return_value=mock_redis):
         res = client.post("/api/chain/trigger/flow_test", json=trigger_payload)
         assert res.status_code == 200
         data = res.json()
@@ -156,7 +157,7 @@ def test_trigger_by_sequence_invalid_name(client):
     assert res.status_code == 404
 
 def test_trigger_by_sequence_general_error(client):
-    with patch("sequence_manager.SequenceManager.trigger_by_definition", side_effect=ValueError("Bad params")):
+    with patch("app.services.sequence_manager.SequenceManager.trigger_by_definition", side_effect=ValueError("Bad params")):
         res = client.post("/api/chain/trigger/some_flow", json={})
         assert res.status_code == 400
 
@@ -170,7 +171,7 @@ def test_trigger_chain_adhoc_success(client):
         "mappings": []
     }
     mock_redis = AsyncMock()
-    with patch("routes.get_arq_redis", return_value=mock_redis):
+    with patch("app.api.endpoints.chain.get_arq_redis", return_value=mock_redis):
         res = client.post("/api/chain/trigger", json=payload)
         assert res.status_code == 200
         assert res.json()["status"] == "PENDING"
@@ -186,7 +187,7 @@ def test_trigger_chain_adhoc_invalid_service(client):
     assert res.status_code == 404
 
 def test_trigger_chain_adhoc_error(client):
-    with patch("sequence_manager.SequenceManager.create_execution", side_effect=ValueError("Error")):
+    with patch("app.services.sequence_manager.SequenceManager.create_execution", side_effect=ValueError("Error")):
         res = client.post("/api/chain/trigger", json={"sequence": ["todo_service"], "inputs": {}, "mappings": []})
         assert res.status_code == 400
 
@@ -240,8 +241,8 @@ def test_cancel_chain_route(client, db_session):
     db_session.commit()
 
     mock_redis = AsyncMock()
-    with patch("routes.get_arq_redis", return_value=mock_redis), \
-         patch("routes.Job.abort", new_callable=AsyncMock) as mock_abort:
+    with patch("app.api.endpoints.chain.get_arq_redis", return_value=mock_redis), \
+         patch("app.api.endpoints.chain.Job.abort", new_callable=AsyncMock) as mock_abort:
         res = client.post(f"/api/chain/cancel/{exec_id}")
         assert res.status_code == 200
         assert "Cancellation" in res.json()["detail"]
@@ -289,7 +290,7 @@ def test_retry_chain_resume(client, db_session):
     db_session.commit()
 
     mock_redis = AsyncMock()
-    with patch("routes.get_arq_redis", return_value=mock_redis):
+    with patch("app.api.endpoints.chain.get_arq_redis", return_value=mock_redis):
         res = client.post(f"/api/chain/retry/{exec_id}", json={"strategy": "resume"})
         assert res.status_code == 200
         assert res.json()["status"] == "PENDING"
@@ -312,7 +313,7 @@ def test_retry_chain_restart(client, db_session):
     db_session.commit()
 
     mock_redis = AsyncMock()
-    with patch("routes.get_arq_redis", return_value=mock_redis):
+    with patch("app.api.endpoints.chain.get_arq_redis", return_value=mock_redis):
         res = client.post(f"/api/chain/retry/{exec_id}", json={"strategy": "restart"})
         assert res.status_code == 200
         assert res.json()["status"] == "PENDING"

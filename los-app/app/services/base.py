@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
-from utils import APIClient, get_by_path
+from app.core.utils import APIClient, get_by_path
 
 class BaseService(ABC):
     @property
@@ -21,7 +21,7 @@ class BaseService(ABC):
 
     @property
     def is_critical(self) -> bool:
-        """If True, failure of this service fails the entire sequence. Otherwise continues as partial success."""
+        """If True, failure of this service fails the entire sequence."""
         return True
 
     @property
@@ -30,22 +30,16 @@ class BaseService(ABC):
         return 10.0
 
     async def compensate(self, payload: Dict[str, Any], response: Dict[str, Any], client: APIClient) -> None:
-        """
-        Compensating transaction logic (Saga Rollback) for this service.
-        Override in subclasses to delete created resources, cancel applications, etc.
-        """
+        """Compensating transaction logic (Saga Rollback)."""
         pass
 
     @property
     def success_conditions(self) -> Optional[Dict[str, Any]]:
-        """
-        Statically defined default success conditions for the service.
-        Can specify allowed 'status_codes' and 'body_rules'.
-        """
+        """Default success conditions for the service."""
         return None
 
     def get_mock_response(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Implement to return service-specific mock data based on parameters."""
+        """Implement to return service-specific mock data."""
         raise NotImplementedError(f"Mock response not implemented for service: {self.name}")
 
     async def execute(
@@ -56,11 +50,6 @@ class BaseService(ABC):
         success_conditions: Optional[Dict[str, Any]] = None,
         execution_source: str = "standalone"
     ) -> Dict[str, Any]:
-        """
-        Standardized execution wrapper. Handles routing to mock behavior
-        or executing actual logic, ensuring standard response formats,
-        and validating against success conditions.
-        """
         should_mock = self.mock_enabled
         if mock_override is not None:
             should_mock = mock_override
@@ -110,7 +99,6 @@ class BaseService(ABC):
                     "execution_source": execution_source
                 }
 
-        # Apply success conditions checks
         conditions = success_conditions if success_conditions is not None else self.success_conditions
         if conditions and result.get("success"):
             allowed_codes = conditions.get("status_codes")
@@ -133,8 +121,4 @@ class BaseService(ABC):
 
     @abstractmethod
     async def _run(self, payload: Dict[str, Any], client: APIClient) -> Dict[str, Any]:
-        """
-        Developer API logic implementation.
-        Must execute third-party requests via the provided client.
-        """
         pass

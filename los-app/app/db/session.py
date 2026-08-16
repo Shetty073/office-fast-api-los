@@ -1,7 +1,7 @@
 from sqlalchemy import create_engine, text
-from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-import config
+from app.core import config
+from app.db.base import Base
 
 def init_database():
     """Ensure the database exists on PostgreSQL / MySQL. Bypassed for SQLite."""
@@ -10,7 +10,6 @@ def init_database():
         return
     try:
         if "postgresql" in db_url:
-            # Connect to default 'postgres' db to create the target db if missing
             postgres_admin_url = f"postgresql+psycopg2://{config.DATABASE_USER}:{config.DATABASE_PASS}@{config.DATABASE_HOST}:{config.DATABASE_PORT}/postgres"
             temp_engine = create_engine(postgres_admin_url, isolation_level="AUTOCOMMIT")
             with temp_engine.connect() as conn:
@@ -35,7 +34,6 @@ if config.DATABASE_URL.startswith("sqlite"):
 
 engine = create_engine(config.DATABASE_URL, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
 
 def get_db():
     db = SessionLocal()

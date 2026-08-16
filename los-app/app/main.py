@@ -1,9 +1,11 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
-from database import engine, Base
-from routes import router
-import services  # Imports package to execute registration decorators for all services
-from redis_pool import init_redis_pool, close_redis_pool
+from app.db.base import Base
+from app.db.session import engine
+from app.api.router import api_router
+from app.services.registry import ServiceRegistry
+from app.core.redis_pool import init_redis_pool, close_redis_pool
+import app.services  # Auto-registers services
 import logging
 
 logger = logging.getLogger(__name__)
@@ -13,16 +15,14 @@ Base.metadata.create_all(bind=engine)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize ARQ Redis connection pool
     try:
         await init_redis_pool()
-        logger.info("FastAPI connected to ARQ Redis pool successfully.")
+        logger.info("FastAPI connected to ARQ Redis pool.")
     except Exception as e:
         logger.warning(f"Could not connect to Redis at startup: {e}")
     
     yield
     
-    # Graceful shutdown of Redis connection pool
     await close_redis_pool()
     logger.info("FastAPI closed ARQ Redis pool.")
 
@@ -33,12 +33,12 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-app.include_router(router)
+app.include_router(api_router, prefix="/api")
 
 @app.get("/")
 def read_root():
     return {
         "status": "online",
         "message": "SCF LOS Backend Engine is running successfully.",
-        "registered_services": services.ServiceRegistry.list_services()
+        "registered_services": ServiceRegistry.list_services()
     }

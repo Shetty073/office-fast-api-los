@@ -1,12 +1,15 @@
-#!/bin/bash
-# Test execution runner with code coverage calculations
+#!/usr/bin/env bash
+# Runs test suites for both los-app and orchestration-service with coverage
+set -e
 
-if [ -d ".venv" ]; then
-    source .venv/bin/activate
-fi
+echo "=== 1. Running los-app Test Suite ==="
+cd "$(dirname "$0")/los-app"
+python -m pytest --cov=app --cov-report=term-missing tests
 
-echo "Setting SQLite test database..."
-export DATABASE_URL="sqlite:///test_los.db"
+echo ""
+echo "=== 2. Running orchestration-service Test Suite ==="
+cd "../orchestration-service"
+python -m pytest --cov=. --cov-report=term-missing tests
 
-echo "Executing unit tests..."
-pytest --cov=. --cov-report=term-missing -vv tests/
+echo ""
+echo "All tests passed successfully!"

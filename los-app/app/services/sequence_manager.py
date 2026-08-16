@@ -1,9 +1,10 @@
 import uuid
 from typing import List, Dict, Any, Optional, Union
 from sqlalchemy.orm import Session
-from models import SequenceExecution, SequenceDefinition
-from services.registry import ServiceRegistry
-from utils import get_by_path, set_by_path
+from app.models.sequence_definition import SequenceDefinition
+from app.models.sequence_execution import SequenceExecution
+from app.services.registry import ServiceRegistry
+from app.core.utils import get_by_path, set_by_path
 
 class SequenceManager:
     """
@@ -20,8 +21,6 @@ class SequenceManager:
         success_conditions: Optional[Dict[str, Dict[str, Any]]] = None,
         conditions: Optional[Dict[str, str]] = None
     ) -> SequenceDefinition:
-        """Create or update a sequence definition recipe in the database."""
-        # Ensure all services exist in the registry
         for item in sequence:
             if isinstance(item, list):
                 for s in item:
@@ -31,7 +30,6 @@ class SequenceManager:
                 if item not in ServiceRegistry.list_services():
                     raise KeyError(f"Service '{item}' is not registered.")
 
-        # Serialize mappings
         serialized_mappings = []
         for m in (mappings or []):
             if hasattr(m, "model_dump"):
@@ -78,9 +76,6 @@ class SequenceManager:
         context: Optional[Dict[str, Any]] = None,
         callback_url: Optional[str] = None
     ) -> SequenceExecution:
-        """
-        Creates an execution from a stored SequenceDefinition recipe.
-        """
         if idempotency_key:
             existing = db.query(SequenceExecution).filter(
                 SequenceExecution.idempotency_key == idempotency_key
@@ -96,7 +91,6 @@ class SequenceManager:
         if not seq_def:
             raise KeyError(f"Sequence definition '{sequence_name_or_id}' not found.")
 
-        # Prepare base inputs combining default_inputs and overrides
         combined_inputs = dict(seq_def.default_inputs or {})
         if inputs_override:
             for s_name, s_payload in inputs_override.items():
@@ -104,7 +98,6 @@ class SequenceManager:
                     combined_inputs[s_name] = {}
                 combined_inputs[s_name].update(s_payload)
 
-        # Apply trigger_payload mappings directly to initial inputs
         trigger_data = trigger_payload or {}
         for m in seq_def.mappings:
             if m.get("from_service") == "trigger_payload":
@@ -164,7 +157,6 @@ class SequenceManager:
         context: Optional[Dict[str, Any]] = None,
         callback_url: Optional[str] = None
     ) -> SequenceExecution:
-        """Ad-hoc raw execution creation (for backwards compatibility)."""
         if idempotency_key:
             existing = db.query(SequenceExecution).filter(
                 SequenceExecution.idempotency_key == idempotency_key

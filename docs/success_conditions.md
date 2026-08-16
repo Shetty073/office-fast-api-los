@@ -1,85 +1,77 @@
-# Success Conditions
+# Success Conditions & Assertion Rules
 
-Success conditions define assertions that a service's response must meet to be considered successful during orchestrations (or standalone runs). If a service fails any success condition, its step execution status transitions to `FAILED`.
-
----
-
-## Configuration Types
-
-Success conditions can be defined:
-1. **Statically (Service Class Defaults)**: Default rules declared in Python within the service's class definition.
-2. **Dynamically (Trigger Payloads)**: Runtime overrides specified directly in the `POST /api/chain/trigger` payload.
+Success conditions define assertions that a service's response must meet to be considered successful during orchestrations (or standalone runs). If a service fails any success condition, its step execution status transitions to `FAILED`, and the orchestrator triggers the **Saga pattern rollback**.
 
 ---
 
-## Condition Schema
+## 1. Configuration Schema
 
-A success condition configuration consists of two optional validation keys:
+Success conditions can be defined statically on the `BaseService` or dynamically in sequence recipes / trigger payloads:
 
 ```json
 {
   "status_codes": [200, 201],
   "body_rules": {
-    "data.key_name": "expected_value",
-    "status_code": 200
+    "data.status": "ACTIVE",
+    "data.verified": true,
+    "success": true
   }
 }
 ```
 
 ### Validation Keys
 1. **`status_codes`** (List of Integers):
-   * A list of acceptable HTTP status codes returned by the service wrapper or downstream API.
-   * *Example:* `[200]` or `[200, 201]`.
+   - Acceptable HTTP status codes returned by the service wrapper or downstream API.
+   - *Example:* `[200]` or `[200, 201]`.
 2. **`body_rules`** (Dictionary of String -> Any):
-   * Dot-notated paths mapped to expected values. Paths are evaluated against the entire standardized service execution response.
-   * To check keys in the nested payload returned by the third-party API, prefix the path with `data.`.
-   * *Example:* `{"data.completed": true}` asserts that the nested key `completed` inside the response data is `true`.
+   - Dot-notated paths mapped to expected values.
+   - *Example:* `{"data.completed": true}` asserts that the nested key `completed` inside `data` is `true`.
 
 ---
 
-## Statically Defining Defaults (in Code)
+## 2. Setting Default Success Conditions in Python
 
-To define a default success condition for a service, override the `success_conditions` property in the service class:
+In your service class in `los-app/app/services/my_service.py`:
 
 ```python
 from typing import Dict, Any
-from services.base import BaseService
+from app.services.base import BaseService
+from app.services.registry import register_service
 
-class MyCustomService(BaseService):
-    # ...
-    
+@register_service
+class MyService(BaseService):
+    @property
+    def name(self) -> str:
+        return "my_service"
+
     @property
     def success_conditions(self) -> Dict[str, Any]:
         return {
             "status_codes": [200],
             "body_rules": {
-                "data.completed": True
+                "data.status": "ACTIVE"
             }
         }
 ```
 
 ---
 
-## Dynamically Overriding Conditions (in Request Payload)
+## 3. Configuring Success Conditions in JSON Recipes
 
-You can pass custom success conditions at runtime when triggering a sequence. These will override any defaults defined in the service classes.
+In a database sequence definition (`POST /api/sequences`):
 
-### Request Payload Example:
 ```json
 {
-    "sequence": ["todo_service"],
-    "inputs": {
-        "todo_service": {"todo_id": 1}
-    },
-    "success_conditions": {
-        "todo_service": {
-            "status_codes": [200],
-            "body_rules": {
-                "data.completed": false
-            }
-        }
+  "name": "resilient_verification_pipeline",
+  "sequence": ["todo_service", "post_service"],
+  "success_conditions": {
+    "todo_service": {
+      "status_codes": [200],
+      "body_rules": {
+        "data.completed": true
+      }
     }
+  }
 }
 ```
-In this scenario, if the `todo_service` returns a response with `"completed": true`, the orchestrator fails the step with an validation error:
-`Success condition failed: key 'data.completed' expected False, got True`.
+If `todo_service` returns `"completed": false`, the step fails, retries if configured, and if still unsuccessful triggers the Saga rollback compensating previously executed steps.
