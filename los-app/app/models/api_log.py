@@ -1,8 +1,8 @@
-from datetime import datetime
-from sqlalchemy import Column, Integer, String, JSON, Text, DateTime
+from sqlalchemy import Column, Integer, String, JSON, Text
 from app.db.base import Base
+from app.models.base_mixin import TimestampMixin
 
-class APILog(Base):
+class APILog(Base, TimestampMixin):
     __tablename__ = "api_logs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -16,4 +16,3 @@ class APILog(Base):
     response_headers = Column(JSON, nullable=True)
     response_body = Column(Text, nullable=True)
     duration_ms = Column(Integer, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)

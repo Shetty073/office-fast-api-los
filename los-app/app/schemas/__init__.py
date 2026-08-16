@@ -7,6 +7,14 @@ from app.schemas.sequence_execution import (
     SequenceExecutionResponseSchema,
     SequenceRetrySchema
 )
+from app.schemas.auth import (
+    AppRegisterRequestSchema,
+    AppRegisterResponseSchema,
+    LoginRequestSchema,
+    TokenResponseSchema,
+    UserResponseSchema,
+    DeactivateUserResponseSchema
+)
 
 __all__ = [
     "MappingSchema",
@@ -16,5 +24,11 @@ __all__ = [
     "SequenceTriggerSchema",
     "StepExecutionSchema",
     "SequenceExecutionResponseSchema",
-    "SequenceRetrySchema"
+    "SequenceRetrySchema",
+    "AppRegisterRequestSchema",
+    "AppRegisterResponseSchema",
+    "LoginRequestSchema",
+    "TokenResponseSchema",
+    "UserResponseSchema",
+    "DeactivateUserResponseSchema"
 ]

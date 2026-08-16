@@ -2,319 +2,540 @@
   "info": {
     "_postman_id": "a4d33939-e470-424a-b51f-506bc1cd79a0",
     "name": "SCF LOS API Engine",
-    "description": "Postman Collection for SCF LOS API Engine with Generic Database-Driven ARQ Orchestration",
+    "description": "Enterprise-grade SCF LOS API Engine with Authentication, AES-256 Payload Encryption, PII Masking, Hash-Based Idempotency, and Generic ARQ Orchestration.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
     {
-      "name": "Health Check & Registered Services",
-      "request": {
-        "method": "GET",
-        "header": [],
-        "url": {
-          "raw": "{{base_url}}/",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            ""
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Standalone Service - Todo Service (Mock)",
-      "request": {
-        "method": "POST",
-        "header": [],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n    \"todo_id\": 1\n}",
-          "options": {
-            "raw": {
-              "language": "json"
+      "name": "01. Authentication & Client Management",
+      "item": [
+        {
+          "name": "Admin Login",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"username\": \"admin\",\n    \"password\": \"admin12345\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
             }
-          }
+          },
+          "response": []
         },
-        "url": {
-          "raw": "{{base_url}}/api/standalone/todo_service?mock=true",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "api",
-            "standalone",
-            "todo_service"
-          ],
-          "query": [
-            {
-              "key": "mock",
-              "value": "true"
+        {
+          "name": "Register New Client Application (Admin Only)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"username\": \"los_portal_ui\",\n    \"password\": \"portal_secure_pass_123\",\n    \"app_name\": \"LOS Customer Portal\",\n    \"is_admin\": false,\n    \"enable_encryption\": true,\n    \"token_expiry_seconds\": 43200\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/register-app",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "register-app"
+              ]
             }
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Standalone Service - Post Service (Mock)",
-      "request": {
-        "method": "POST",
-        "header": [],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n    \"title\": \"Custom Post Title\",\n    \"body\": \"Custom post body text\",\n    \"userId\": 1\n}",
-          "options": {
-            "raw": {
-              "language": "json"
-            }
-          }
+          },
+          "response": []
         },
-        "url": {
-          "raw": "{{base_url}}/api/standalone/post_service?mock=true",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "api",
-            "standalone",
-            "post_service"
-          ],
-          "query": [
-            {
-              "key": "mock",
-              "value": "true"
+        {
+          "name": "Client Login (Get Token)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"username\": \"los_portal_ui\",\n    \"password\": \"portal_secure_pass_123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
             }
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Sequence Recipes - Register / Update Recipe in DB",
-      "request": {
-        "method": "POST",
-        "header": [],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n    \"name\": \"user_onboarding_flow\",\n    \"description\": \"Onboarding pipeline: fetches todo item and maps its title to post body\",\n    \"sequence\": [\n        \"todo_service\",\n        \"post_service\"\n    ],\n    \"default_inputs\": {\n        \"todo_service\": {\n            \"_mock\": true\n        },\n        \"post_service\": {\n            \"title\": \"Automated Onboarding Post\",\n            \"_mock\": true\n        }\n    },\n    \"mappings\": [\n        {\n            \"from_service\": \"trigger_payload\",\n            \"from_field\": \"customer_id\",\n            \"to_service\": \"todo_service\",\n            \"to_field\": \"todo_id\"\n        },\n        {\n            \"from_service\": \"todo_service\",\n            \"from_field\": \"data.title\",\n            \"to_service\": \"post_service\",\n            \"to_field\": \"body\"\n        }\n    ]\n}",
-          "options": {
-            "raw": {
-              "language": "json"
-            }
-          }
+          },
+          "response": []
         },
-        "url": {
-          "raw": "{{base_url}}/api/sequences",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "api",
-            "sequences"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Sequence Recipes - List All Registered Recipes",
-      "request": {
-        "method": "GET",
-        "header": [],
-        "url": {
-          "raw": "{{base_url}}/api/sequences",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "api",
-            "sequences"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Sequence Recipes - Get Recipe Details",
-      "request": {
-        "method": "GET",
-        "header": [],
-        "url": {
-          "raw": "{{base_url}}/api/sequences/user_onboarding_flow",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "api",
-            "sequences",
-            "user_onboarding_flow"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Trigger Sequence by Name (via ARQ Queue)",
-      "request": {
-        "method": "POST",
-        "header": [],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n    \"payload\": {\n        \"customer_id\": 7\n    },\n    \"idempotency_key\": \"idemp-postman-001\"\n}",
-          "options": {
-            "raw": {
-              "language": "json"
+        {
+          "name": "Get Authenticated User Profile (/me)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/me",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "me"
+              ]
             }
-          }
+          },
+          "response": []
         },
-        "url": {
-          "raw": "{{base_url}}/api/chain/trigger/user_onboarding_flow",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "api",
-            "chain",
-            "trigger",
-            "user_onboarding_flow"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Trigger Sequence - Ad-hoc Custom Sequence (via ARQ Queue)",
-      "request": {
-        "method": "POST",
-        "header": [],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n    \"sequence\": [\n        \"todo_service\",\n        [\n            \"post_service\"\n        ]\n    ],\n    \"inputs\": {\n        \"todo_service\": {\n            \"todo_id\": 2,\n            \"_mock\": true\n        },\n        \"post_service\": {\n            \"title\": \"Parallel Step Post\",\n            \"body\": \"Dynamic Body\",\n            \"_mock\": true\n        }\n    },\n    \"mappings\": [\n        {\n            \"from_service\": \"todo_service\",\n            \"from_field\": \"data.title\",\n            \"to_service\": \"post_service\",\n            \"to_field\": \"body\"\n        }\n    ],\n    \"idempotency_key\": \"idemp-adhoc-001\"\n}",
-          "options": {
-            "raw": {
-              "language": "json"
+        {
+          "name": "Deactivate Client User (Admin Only)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/deactivate/los_portal_ui",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "deactivate",
+                "los_portal_ui"
+              ]
             }
-          }
-        },
-        "url": {
-          "raw": "{{base_url}}/api/chain/trigger",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "api",
-            "chain",
-            "trigger"
-          ]
+          },
+          "response": []
         }
-      },
-      "response": []
+      ]
     },
     {
-      "name": "Get Chain Status",
-      "request": {
-        "method": "GET",
-        "header": [],
-        "url": {
-          "raw": "{{base_url}}/api/chain/status/YOUR_EXECUTION_ID",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "api",
-            "chain",
-            "status",
-            "YOUR_EXECUTION_ID"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Cancel Active Execution",
-      "request": {
-        "method": "POST",
-        "header": [],
-        "url": {
-          "raw": "{{base_url}}/api/chain/cancel/YOUR_EXECUTION_ID",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "api",
-            "chain",
-            "cancel",
-            "YOUR_EXECUTION_ID"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Retry Execution (Resume Strategy)",
-      "request": {
-        "method": "POST",
-        "header": [],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n    \"strategy\": \"resume\"\n}",
-          "options": {
-            "raw": {
-              "language": "json"
+      "name": "02. Standalone APIs",
+      "item": [
+        {
+          "name": "Health Check & Registered Services",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                ""
+              ]
             }
-          }
+          },
+          "response": []
         },
-        "url": {
-          "raw": "{{base_url}}/api/chain/retry/YOUR_EXECUTION_ID",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "api",
-            "chain",
-            "retry",
-            "YOUR_EXECUTION_ID"
-          ]
+        {
+          "name": "Todo Service (Plaintext)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"todo_id\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/standalone/todo_service?mock=true",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "standalone",
+                "todo_service"
+              ],
+              "query": [
+                {
+                  "key": "mock",
+                  "value": "true"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Post Service (Plaintext)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"title\": \"Custom Post Title\",\n    \"body\": \"Custom post body text with PAN ABCDE1234F\",\n    \"userId\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/standalone/post_service?mock=true",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "standalone",
+                "post_service"
+              ],
+              "query": [
+                {
+                  "key": "mock",
+                  "value": "true"
+                }
+              ]
+            }
+          },
+          "response": []
         }
-      },
-      "response": []
+      ]
     },
     {
-      "name": "Retry Execution (Restart Strategy)",
-      "request": {
-        "method": "POST",
-        "header": [],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n    \"strategy\": \"restart\"\n}",
-          "options": {
-            "raw": {
-              "language": "json"
+      "name": "03. Sequence Recipes",
+      "item": [
+        {
+          "name": "Register / Update Sequence Recipe in DB",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"name\": \"user_onboarding_flow\",\n    \"description\": \"Onboarding pipeline: fetches todo item and maps its title to post body\",\n    \"sequence\": [\n        \"todo_service\",\n        \"post_service\"\n    ],\n    \"default_inputs\": {\n        \"todo_service\": {\n            \"_mock\": true\n        },\n        \"post_service\": {\n            \"title\": \"Automated Onboarding Post\",\n            \"_mock\": true\n        }\n    },\n    \"mappings\": [\n        {\n            \"from_service\": \"trigger_payload\",\n            \"from_field\": \"customer_id\",\n            \"to_service\": \"todo_service\",\n            \"to_field\": \"todo_id\"\n        },\n        {\n            \"from_service\": \"todo_service\",\n            \"from_field\": \"data.title\",\n            \"to_service\": \"post_service\",\n            \"to_field\": \"body\",\n            \"transform\": \"upper\"\n        }\n    ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/sequences",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "sequences"
+              ]
             }
-          }
+          },
+          "response": []
         },
-        "url": {
-          "raw": "{{base_url}}/api/chain/retry/YOUR_EXECUTION_ID",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "api",
-            "chain",
-            "retry",
-            "YOUR_EXECUTION_ID"
-          ]
+        {
+          "name": "List All Registered Recipes",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/sequences",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "sequences"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Recipe Details",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/sequences/user_onboarding_flow",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "sequences",
+                "user_onboarding_flow"
+              ]
+            }
+          },
+          "response": []
         }
-      },
-      "response": []
+      ]
+    },
+    {
+      "name": "04. Orchestration & Task Execution",
+      "item": [
+        {
+          "name": "Trigger Sequence by Name (via ARQ Queue)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"payload\": {\n        \"customer_id\": 7\n    },\n    \"idempotency_key\": \"idemp-postman-001\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chain/trigger/user_onboarding_flow",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "chain",
+                "trigger",
+                "user_onboarding_flow"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Trigger Ad-hoc Custom Sequence (via ARQ Queue)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"sequence\": [\n        \"todo_service\",\n        [\n            \"post_service\"\n        ]\n    ],\n    \"inputs\": {\n        \"todo_service\": {\n            \"todo_id\": 2,\n            \"_mock\": true\n        },\n        \"post_service\": {\n            \"title\": \"Parallel Step Post\",\n            \"body\": \"Dynamic Body\",\n            \"_mock\": true\n        }\n    },\n    \"mappings\": [\n        {\n            \"from_service\": \"todo_service\",\n            \"from_field\": \"data.title\",\n            \"to_service\": \"post_service\",\n            \"to_field\": \"body\"\n        }\n    ],\n    \"idempotency_key\": \"idemp-adhoc-001\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chain/trigger",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "chain",
+                "trigger"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Chain Status (with Pending/Total counts & Responses)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/chain/status/YOUR_EXECUTION_ID",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "chain",
+                "status",
+                "YOUR_EXECUTION_ID"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Cancel Active Execution",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/chain/cancel/YOUR_EXECUTION_ID",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "chain",
+                "cancel",
+                "YOUR_EXECUTION_ID"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Retry Execution (Resume Strategy)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"strategy\": \"resume\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chain/retry/YOUR_EXECUTION_ID",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "chain",
+                "retry",
+                "YOUR_EXECUTION_ID"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Retry Execution (Restart Strategy)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"strategy\": \"restart\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chain/retry/YOUR_EXECUTION_ID",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "chain",
+                "retry",
+                "YOUR_EXECUTION_ID"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
     }
   ],
   "variable": [
     {
       "key": "base_url",
       "value": "http://127.0.0.1:8000"
+    },
+    {
+      "key": "admin_token",
+      "value": "YOUR_ADMIN_JWT_TOKEN"
+    },
+    {
+      "key": "token",
+      "value": "YOUR_CLIENT_JWT_TOKEN"
     }
   ]
 }

@@ -2,40 +2,40 @@ from datetime import datetime
 from sqlalchemy import Column, Integer, String, JSON, Text, DateTime
 from database import Base
 
-class SequenceDefinition(Base):
+class TimestampMixin:
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+class SequenceDefinition(Base, TimestampMixin):
     __tablename__ = "sequence_definitions"
 
     id = Column(String(36), primary_key=True, index=True)
     name = Column(String(100), unique=True, nullable=False, index=True)
     description = Column(String(500), nullable=True)
-    sequence = Column(JSON, nullable=False)  # List of service names (e.g. ["todo_service", ["post_service", "kyc_service"]])
-    default_inputs = Column(JSON, nullable=True)  # Dict of default static inputs per service
-    mappings = Column(JSON, nullable=False, default=list)  # List of dict mappings
-    success_conditions = Column(JSON, nullable=True)  # Dict of success conditions per service
-    conditions = Column(JSON, nullable=True)  # Dict of execution boolean expressions per service
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    sequence = Column(JSON, nullable=False)
+    default_inputs = Column(JSON, nullable=True)
+    mappings = Column(JSON, nullable=False, default=list)
+    success_conditions = Column(JSON, nullable=True)
+    conditions = Column(JSON, nullable=True)
 
-class SequenceExecution(Base):
+class SequenceExecution(Base, TimestampMixin):
     __tablename__ = "sequence_executions"
 
     id = Column(String(36), primary_key=True, index=True)
     sequence_name = Column(String(100), nullable=True, index=True)
-    sequence = Column(JSON, nullable=False)  # List of service names
-    inputs = Column(JSON, nullable=False)    # Dict of input payloads per service
-    trigger_payload = Column(JSON, nullable=True)  # Raw trigger payload from client
-    mappings = Column(JSON, nullable=False)  # List of dict mappings
-    success_conditions = Column(JSON, nullable=True)  # Dict of success conditions per service
+    sequence = Column(JSON, nullable=False)
+    inputs = Column(JSON, nullable=False)
+    trigger_payload = Column(JSON, nullable=True)
+    mappings = Column(JSON, nullable=False)
+    success_conditions = Column(JSON, nullable=True)
     idempotency_key = Column(String(100), nullable=True, unique=True, index=True)
-    conditions = Column(JSON, nullable=True)  # Dict of execution conditions per service
-    context = Column(JSON, nullable=True)  # Dict representing the shared global context
-    callback_url = Column(String(500), nullable=True)  # Webhook URL for sequence outcomes
-    status = Column(String(20), default="PENDING")  # PENDING, RUNNING, COMPLETED, PARTIAL_SUCCESS, FAILED
+    conditions = Column(JSON, nullable=True)
+    context = Column(JSON, nullable=True)
+    callback_url = Column(String(500), nullable=True)
+    status = Column(String(20), default="PENDING")
     current_step = Column(Integer, default=0)
-    steps_data = Column(JSON, default=list)  # Step tracking (JSON serialization)
+    steps_data = Column(JSON, default=list)
     error_message = Column(String(500), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     @property
     def total_tasks(self) -> int:
@@ -73,7 +73,7 @@ class SequenceExecution(Base):
                 res[s_name] = step.get("output_response")
         return res
 
-class APILog(Base):
+class APILog(Base, TimestampMixin):
     __tablename__ = "api_logs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -87,4 +87,3 @@ class APILog(Base):
     response_headers = Column(JSON, nullable=True)
     response_body = Column(Text, nullable=True)
     duration_ms = Column(Integer, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)

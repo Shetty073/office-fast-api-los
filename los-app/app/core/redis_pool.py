@@ -22,7 +22,13 @@ async def init_redis_pool() -> ArqRedis:
 async def close_redis_pool():
     global _arq_redis_pool
     if _arq_redis_pool is not None:
-        await _arq_redis_pool.close()
+        try:
+            if hasattr(_arq_redis_pool, "aclose"):
+                await _arq_redis_pool.aclose()
+            else:
+                await _arq_redis_pool.close()
+        except Exception:
+            pass
         _arq_redis_pool = None
 
 async def get_arq_redis() -> ArqRedis:

@@ -1,27 +1,25 @@
-from datetime import datetime
-from sqlalchemy import Column, Integer, String, JSON, DateTime
+from sqlalchemy import Column, Integer, String, JSON
 from app.db.base import Base
+from app.models.base_mixin import TimestampMixin
 
-class SequenceExecution(Base):
+class SequenceExecution(Base, TimestampMixin):
     __tablename__ = "sequence_executions"
 
     id = Column(String(36), primary_key=True, index=True)
     sequence_name = Column(String(100), nullable=True, index=True)
-    sequence = Column(JSON, nullable=False)  # List of service names
-    inputs = Column(JSON, nullable=False)    # Dict of input payloads per service
-    trigger_payload = Column(JSON, nullable=True)  # Raw trigger payload from client
-    mappings = Column(JSON, nullable=False)  # List of dict mappings
-    success_conditions = Column(JSON, nullable=True)  # Dict of success conditions per service
+    sequence = Column(JSON, nullable=False)
+    inputs = Column(JSON, nullable=False)
+    trigger_payload = Column(JSON, nullable=True)
+    mappings = Column(JSON, nullable=False)
+    success_conditions = Column(JSON, nullable=True)
     idempotency_key = Column(String(100), nullable=True, unique=True, index=True)
-    conditions = Column(JSON, nullable=True)  # Dict of execution conditions per service
-    context = Column(JSON, nullable=True)  # Dict representing the shared global context
-    callback_url = Column(String(500), nullable=True)  # Webhook URL for sequence outcomes
-    status = Column(String(20), default="PENDING")  # PENDING, RUNNING, COMPLETED, PARTIAL_SUCCESS, FAILED
+    conditions = Column(JSON, nullable=True)
+    context = Column(JSON, nullable=True)
+    callback_url = Column(String(500), nullable=True)
+    status = Column(String(20), default="PENDING")
     current_step = Column(Integer, default=0)
-    steps_data = Column(JSON, default=list)  # Step tracking (JSON serialization)
+    steps_data = Column(JSON, default=list)
     error_message = Column(String(500), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     @property
     def total_tasks(self) -> int:
