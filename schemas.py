@@ -71,6 +71,10 @@ class SequenceExecutionResponseSchema(BaseModel):
     callback_url: Optional[str] = None
     status: str
     current_step: int
+    total_tasks: int = 0
+    completed_tasks: int = 0
+    pending_tasks: int = 0
+    responses: Dict[str, Any] = Field(default_factory=dict, description="Consolidated dictionary of all executed API responses")
     steps_data: List[StepExecutionSchema]
     error_message: Optional[str] = None
     created_at: datetime

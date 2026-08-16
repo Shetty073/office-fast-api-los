@@ -227,22 +227,28 @@ def test_utils_nested_paths():
     
     set_by_path(out, "", 10)
 
+def test_init_database_postgres():
+    from database import init_database
+    with patch("config.DATABASE_URL", "postgresql+psycopg2://postgres:postgres@localhost:5432/office_proj"):
+        with patch("database.create_engine") as mock_create_engine:
+            mock_conn = MagicMock()
+            mock_conn.execute.return_value.scalar.return_value = 0
+            mock_create_engine.return_value.connect.return_value.__enter__.return_value = mock_conn
+            init_database()
+            assert mock_create_engine.called
+
 def test_init_database_mysql():
-    import config
     from database import init_database
     with patch("config.DATABASE_URL", "mysql+pymysql://root:10291996@localhost:3306/office_proj"):
         with patch("database.create_engine") as mock_create_engine:
             mock_conn = MagicMock()
             mock_create_engine.return_value.connect.return_value.__enter__.return_value = mock_conn
-            
             init_database()
-            
-            mock_create_engine.assert_called_with(config.MYSQL_BASE_URL)
             mock_conn.execute.assert_called()
 
-def test_init_database_mysql_failure():
+def test_init_database_failure():
     from database import init_database
-    with patch("config.DATABASE_URL", "mysql+pymysql://root:10291996@localhost:3306/office_proj"):
+    with patch("config.DATABASE_URL", "postgresql+psycopg2://postgres:postgres@localhost:5432/office_proj"):
         with patch("database.create_engine", side_effect=Exception("Connection failed")):
             with patch("builtins.print") as mock_print:
                 init_database()

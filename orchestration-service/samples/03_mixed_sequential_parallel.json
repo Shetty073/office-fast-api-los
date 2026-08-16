@@ -1,0 +1,33 @@
+{
+  "name": "03_mixed_parallel_and_sequential_pipeline",
+  "description": "Sequential step 1 -> Parallel block (step 2A & 2B wait for step 1) -> Sequential step 3 (waits for all parallel steps to finish)",
+  "sequence": [
+    "todo_service",
+    [
+      "post_service"
+    ]
+  ],
+  "default_inputs": {
+    "todo_service": {
+      "_mock": true
+    },
+    "post_service": {
+      "title": "Downstream Aggregation Post",
+      "_mock": true
+    }
+  },
+  "mappings": [
+    {
+      "from_service": "trigger_payload",
+      "from_field": "initial_user_id",
+      "to_service": "todo_service",
+      "to_field": "todo_id"
+    },
+    {
+      "from_service": "todo_service",
+      "from_field": "data.title",
+      "to_service": "post_service",
+      "to_field": "body"
+    }
+  ]
+}

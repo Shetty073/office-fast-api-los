@@ -1,0 +1,35 @@
+{
+  "name": "02_parallel_independent_pipeline",
+  "description": "Fork-Join pattern: Multiple independent services execute concurrently in parallel",
+  "sequence": [
+    [
+      "todo_service",
+      "post_service"
+    ]
+  ],
+  "default_inputs": {
+    "todo_service": {
+      "todo_id": 1,
+      "_mock": true
+    },
+    "post_service": {
+      "title": "Parallel Post",
+      "body": "Independent Task Execution",
+      "_mock": true
+    }
+  },
+  "mappings": [
+    {
+      "from_service": "trigger_payload",
+      "from_field": "account_id",
+      "to_service": "todo_service",
+      "to_field": "todo_id"
+    },
+    {
+      "from_service": "trigger_payload",
+      "from_field": "summary",
+      "to_service": "post_service",
+      "to_field": "title"
+    }
+  ]
+}

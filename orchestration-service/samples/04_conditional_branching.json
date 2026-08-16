@@ -1,0 +1,29 @@
+{
+  "name": "04_conditional_branching_pipeline",
+  "description": "Conditional execution where post_service only executes if todo_service was completed",
+  "sequence": [
+    "todo_service",
+    "post_service"
+  ],
+  "default_inputs": {
+    "todo_service": {
+      "todo_id": 4,
+      "_mock": true
+    },
+    "post_service": {
+      "title": "Conditional Execution Successful",
+      "_mock": true
+    }
+  },
+  "mappings": [
+    {
+      "from_service": "todo_service",
+      "from_field": "data.title",
+      "to_service": "post_service",
+      "to_field": "body"
+    }
+  ],
+  "conditions": {
+    "post_service": "responses.todo_service.data.completed == True"
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "name": "05_resilient_retries_and_success_conditions",
+  "description": "Demonstrates assert conditions (checking response keys/status) and Saga rollback on failure",
+  "sequence": [
+    "todo_service",
+    "post_service"
+  ],
+  "default_inputs": {
+    "todo_service": {
+      "todo_id": 10,
+      "_mock": true
+    },
+    "post_service": {
+      "title": "Post asserting status codes",
+      "body": "Payload",
+      "_mock": true
+    }
+  },
+  "mappings": [
+    {
+      "from_service": "todo_service",
+      "from_field": "data.title",
+      "to_service": "post_service",
+      "to_field": "body"
+    }
+  ],
+  "success_conditions": {
+    "todo_service": {
+      "status_codes": [200],
+      "body_rules": {
+        "success": true
+      }
+    }
+  }
+}

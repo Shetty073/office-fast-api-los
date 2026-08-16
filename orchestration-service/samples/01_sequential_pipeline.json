@@ -1,0 +1,31 @@
+{
+  "name": "01_pure_sequential_pipeline",
+  "description": "Standard linear sequential execution where Step 2 depends on Step 1 output",
+  "sequence": [
+    "todo_service",
+    "post_service"
+  ],
+  "default_inputs": {
+    "todo_service": {
+      "_mock": true
+    },
+    "post_service": {
+      "_mock": true
+    }
+  },
+  "mappings": [
+    {
+      "from_service": "trigger_payload",
+      "from_field": "user_id",
+      "to_service": "todo_service",
+      "to_field": "todo_id"
+    },
+    {
+      "from_service": "todo_service",
+      "from_field": "data.title",
+      "to_service": "post_service",
+      "to_field": "body",
+      "transform": "upper"
+    }
+  ]
+}
