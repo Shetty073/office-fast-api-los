@@ -107,12 +107,12 @@ def test_get_chain_status_with_progress_and_responses(client, db_session):
     response = client.get(f"/api/chain/status/{execution.id}")
     assert response.status_code == 200
     data = response.json()
-    assert data["id"] == execution.id
+    assert data["task_id"] == execution.id
     assert data["status"] == "RUNNING"
-    assert data["total_tasks"] == 2
-    assert data["completed_tasks"] == 1
-    assert data["pending_tasks"] == 1
-    assert "create_post_service" in data["responses"]
+    assert data["count"]["total"] == 2
+    assert data["count"]["completed"] == 1
+    assert data["count"]["pending"] == 1
+    assert "create_post_service" in data["data"]
 
 def test_get_chain_status_not_found(client):
     response = client.get("/api/chain/status/missing-exec-id")

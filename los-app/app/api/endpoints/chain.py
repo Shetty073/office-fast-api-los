@@ -7,8 +7,10 @@ from app.services.sequence_manager import SequenceManager
 from app.schemas.sequence_execution import (
     TriggerSequencePayloadSchema,
     TriggerResponseSchema,
-    SequenceTriggerSchema,
+    SequenceExecutionCreateSchema,
     SequenceExecutionResponseSchema,
+    SequenceStatusResponseSchema,
+    TaskCountSchema,
     SequenceRetrySchema
 )
 from app.core.redis_pool import get_arq_redis
@@ -24,32 +26,29 @@ async def trigger_by_sequence_name(
     db: Session = Depends(get_db)
 ):
     """
-    Trigger a named sequence recipe.
+    Trigger an existing stored database sequence definition recipe by name or ID.
     Returns only task_id and task_name.
-    If 'previous_task_id' is provided, resumes from the point of failure.
     """
     try:
         execution = SequenceManager.trigger_by_definition(
             db=db,
             sequence_name_or_id=sequence_name_or_id,
             trigger_payload=payload.payload,
-            inputs_override=payload.inputs_override,
             idempotency_key=payload.idempotency_key,
-            previous_task_id=payload.previous_task_id,
+            callback_url=payload.callback_url,
             context=payload.context,
-            callback_url=payload.callback_url
+            previous_task_id=payload.previous_task_id
         )
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    if getattr(execution, "_is_new", True):
+    if getattr(execution, "_is_new", True) or payload.previous_task_id:
         try:
             arq_redis = await get_arq_redis()
-            job_id = f"{execution.id}-run"
-            await arq_redis.enqueue_job("run_sequence_task", execution.id, _job_id=job_id)
-            logger.info(f"Enqueued sequence task {execution.id} ({sequence_name_or_id}) into ARQ")
+            await arq_redis.enqueue_job("run_sequence_task", execution.id)
+            logger.info(f"Enqueued sequence task {execution.id} into ARQ")
         except Exception as e:
             logger.error(f"Failed to enqueue task {execution.id} to ARQ: {e}")
 
@@ -60,7 +59,7 @@ async def trigger_by_sequence_name(
 
 @router.post("/trigger", response_model=SequenceExecutionResponseSchema)
 async def trigger_chain_adhoc(
-    payload: SequenceTriggerSchema, 
+    payload: SequenceExecutionCreateSchema, 
     db: Session = Depends(get_db)
 ):
     """
@@ -93,15 +92,26 @@ async def trigger_chain_adhoc(
 
     return execution
 
-@router.get("/status/{execution_id}", response_model=SequenceExecutionResponseSchema)
+@router.get("/status/{execution_id}", response_model=SequenceStatusResponseSchema)
 async def get_chain_status(execution_id: str, db: Session = Depends(get_db)):
     """
-    Retrieve the status, step execution traces, inputs, outputs, and task counts of a sequence run.
+    Retrieve sequence execution status, task counts, task_id, and response data dictionary.
     """
     execution = db.query(SequenceExecution).filter(SequenceExecution.id == execution_id).first()
     if not execution:
         raise HTTPException(status_code=404, detail=f"Sequence execution '{execution_id}' not found.")
-    return execution
+    
+    return SequenceStatusResponseSchema(
+        task_id=execution.id,
+        status=execution.status,
+        count=TaskCountSchema(
+            total=execution.total_tasks,
+            completed=execution.completed_tasks,
+            failed=execution.failed_tasks,
+            pending=execution.pending_tasks
+        ),
+        data=execution.responses
+    )
 
 @router.post("/cancel/{execution_id}")
 async def cancel_chain(

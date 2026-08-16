@@ -2,8 +2,10 @@ from app.schemas.mapping import MappingSchema
 from app.schemas.sequence_definition import SequenceDefinitionCreateSchema, SequenceDefinitionResponseSchema
 from app.schemas.sequence_execution import (
     TriggerSequencePayloadSchema,
-    SequenceTriggerSchema,
+    TriggerResponseSchema,
     StepExecutionSchema,
+    SequenceStatusResponseSchema,
+    TaskCountSchema,
     SequenceExecutionResponseSchema,
     SequenceRetrySchema
 )
@@ -21,8 +23,10 @@ __all__ = [
     "SequenceDefinitionCreateSchema",
     "SequenceDefinitionResponseSchema",
     "TriggerSequencePayloadSchema",
-    "SequenceTriggerSchema",
+    "TriggerResponseSchema",
     "StepExecutionSchema",
+    "SequenceStatusResponseSchema",
+    "TaskCountSchema",
     "SequenceExecutionResponseSchema",
     "SequenceRetrySchema",
     "AppRegisterRequestSchema",

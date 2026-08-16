@@ -57,13 +57,16 @@ class SequenceExecution(Base, TimestampMixin):
         return count
 
     @property
-    def pending_tasks(self) -> int:
+    def failed_tasks(self) -> int:
         count = 0
         for step in (self.steps_data or []):
-            if step.get("status") == "PENDING":
+            if step.get("status") == "FAILED":
                 count += 1
-        remaining = self.total_tasks - len(self.steps_data or [])
-        return max(0, count + remaining)
+        return count
+
+    @property
+    def pending_tasks(self) -> int:
+        return max(0, self.total_tasks - self.completed_tasks - self.failed_tasks)
 
     @property
     def responses(self) -> dict:
