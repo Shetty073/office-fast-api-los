@@ -171,3 +171,14 @@ def test_hash_idempotency_middleware(client):
         res2 = client.post("/api/standalone/todo_service?mock=true", json={"todo_id": 2})
         assert res2.status_code == 409
         assert "Duplicate request rejected" in res2.json()["detail"]
+
+def test_unauthenticated_request_blocked(unauthenticated_client):
+    """Ensure all business endpoints strictly reject requests without Bearer token (401 Unauthorized)."""
+    res1 = unauthenticated_client.post("/api/standalone/todo_service", json={"todo_id": 1})
+    assert res1.status_code == 401
+
+    res2 = unauthenticated_client.get("/api/sequences")
+    assert res2.status_code == 401
+
+    res3 = unauthenticated_client.post("/api/chain/trigger", json={"sequence": ["todo_service"]})
+    assert res3.status_code == 401
